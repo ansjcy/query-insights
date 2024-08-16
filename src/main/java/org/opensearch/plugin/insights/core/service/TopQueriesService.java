@@ -8,12 +8,6 @@
 
 package org.opensearch.plugin.insights.core.service;
 
-import static org.opensearch.plugin.insights.settings.QueryInsightsSettings.DEFAULT_TOP_N_QUERIES_INDEX_PATTERN;
-import static org.opensearch.plugin.insights.settings.QueryInsightsSettings.DEFAULT_TOP_QUERIES_EXPORTER_TYPE;
-import static org.opensearch.plugin.insights.settings.QueryInsightsSettings.EXPORTER_TYPE;
-import static org.opensearch.plugin.insights.settings.QueryInsightsSettings.EXPORT_INDEX;
-import static org.opensearch.plugin.insights.settings.QueryInsightsSettings.QUERY_INSIGHTS_EXECUTOR;
-
 import java.io.IOException;
 import java.time.Instant;
 import java.time.LocalDateTime;
@@ -35,10 +29,14 @@ import org.opensearch.common.unit.TimeValue;
 import org.opensearch.plugin.insights.core.exporter.QueryInsightsExporter;
 import org.opensearch.plugin.insights.core.exporter.QueryInsightsExporterFactory;
 import org.opensearch.plugin.insights.core.exporter.SinkType;
+import org.opensearch.plugin.insights.core.reader.QueryInsightsReader;
+import org.opensearch.plugin.insights.core.reader.QueryInsightsReaderFactory;
 import org.opensearch.plugin.insights.rules.model.MetricType;
 import org.opensearch.plugin.insights.rules.model.SearchQueryRecord;
 import org.opensearch.plugin.insights.settings.QueryInsightsSettings;
 import org.opensearch.threadpool.ThreadPool;
+
+import static org.opensearch.plugin.insights.settings.QueryInsightsSettings.*;
 
 /**
  * Service responsible for gathering and storing top N queries
@@ -84,6 +82,11 @@ public class TopQueriesService {
     private final QueryInsightsExporterFactory queryInsightsExporterFactory;
 
     /**
+     * Factory for validating and creating readers
+     */
+    private final QueryInsightsReaderFactory queryInsightsReaderFactory;
+
+    /**
      * The internal OpenSearch thread pool that execute async processing and exporting tasks
      */
     private final ThreadPool threadPool;
@@ -92,20 +95,23 @@ public class TopQueriesService {
      * Exporter for exporting top queries data
      */
     private QueryInsightsExporter exporter;
+    private QueryInsightsReader reader;
 
     TopQueriesService(
         final MetricType metricType,
         final ThreadPool threadPool,
-        final QueryInsightsExporterFactory queryInsightsExporterFactory
+        final QueryInsightsExporterFactory queryInsightsExporterFactory, QueryInsightsReaderFactory queryInsightsReaderFactory
     ) {
         this.enabled = false;
         this.metricType = metricType;
         this.threadPool = threadPool;
         this.queryInsightsExporterFactory = queryInsightsExporterFactory;
+        this.queryInsightsReaderFactory = queryInsightsReaderFactory;
         this.topNSize = QueryInsightsSettings.DEFAULT_TOP_N_SIZE;
         this.windowSize = QueryInsightsSettings.DEFAULT_WINDOW_SIZE;
         this.windowStart = -1L;
         this.exporter = null;
+        this.reader = null;
         topQueriesStore = new PriorityQueue<>(topNSize, (a, b) -> SearchQueryRecord.compare(a, b, metricType));
         topQueriesCurrentSnapshot = new AtomicReference<>(new ArrayList<>());
         topQueriesHistorySnapshot = new AtomicReference<>(new ArrayList<>());
@@ -238,12 +244,23 @@ public class TopQueriesService {
     }
 
     /**
-     * Validate provided settings for top queries exporter
+     * Set up the top queries reader based on provided settings
      *
-     * @param settings settings exporter config {@link Settings}
+     * @param settings reader config {@link Settings}
      */
-    public void validateExporterConfig(Settings settings) {
+    public void setReader(final Settings settings) {
+        this.reader = queryInsightsReaderFactory.createReader(settings.get(EXPORT_INDEX, DEFAULT_TOP_N_QUERIES_INDEX_PATTERN));
+        queryInsightsReaderFactory.updateReader(reader, settings.get(EXPORT_INDEX, DEFAULT_TOP_N_QUERIES_INDEX_PATTERN));
+    }
+
+    /**
+     * Validate provided settings for top queries exporter and reader
+     *
+     * @param settings settings exporter/reader config {@link Settings}
+     */
+    public void validateExporterReaderConfig(Settings settings) {
         queryInsightsExporterFactory.validateExporterConfig(settings);
+        queryInsightsReaderFactory.validateReaderConfig(settings);
     }
 
     /**
@@ -266,6 +283,28 @@ public class TopQueriesService {
         final List<SearchQueryRecord> queries = new ArrayList<>(topQueriesCurrentSnapshot.get());
         if (includeLastWindow) {
             queries.addAll(topQueriesHistorySnapshot.get());
+        }
+        return Stream.of(queries)
+            .flatMap(Collection::stream)
+            .sorted((a, b) -> SearchQueryRecord.compare(a, b, metricType) * -1)
+            .collect(Collectors.toList());
+    }
+
+    public List<SearchQueryRecord> getTopQueriesRecordsFromIndex(String from, String to) throws IllegalArgumentException {
+        if (!enabled) {
+            throw new IllegalArgumentException(
+                String.format(Locale.ROOT, "Cannot get top n queries for [%s] when it is not enabled.", metricType.toString())
+            );
+        }
+        final List<SearchQueryRecord> queries = new ArrayList<>(topQueriesCurrentSnapshot.get());
+        queries.addAll(topQueriesHistorySnapshot.get());
+        if (reader != null) {
+            try {
+                List<SearchQueryRecord> records = reader.read(from, to);
+                queries.addAll(records);
+            } catch (Exception e) {
+                logger.error("Failed to read from index: ", e);
+            }
         }
         return Stream.of(queries)
             .flatMap(Collection::stream)
@@ -366,5 +405,6 @@ public class TopQueriesService {
      */
     public void close() throws IOException {
         queryInsightsExporterFactory.closeExporter(this.exporter);
+        queryInsightsReaderFactory.closeReader(this.reader);
     }
 }

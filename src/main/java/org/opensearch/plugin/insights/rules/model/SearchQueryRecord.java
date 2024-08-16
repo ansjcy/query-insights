@@ -9,26 +9,44 @@
 package org.opensearch.plugin.insights.rules.model;
 
 import java.io.IOException;
-import java.util.HashMap;
-import java.util.Map;
-import java.util.Objects;
+import java.util.*;
+
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
+import org.opensearch.common.xcontent.LoggingDeprecationHandler;
+import org.opensearch.common.xcontent.XContentType;
 import org.opensearch.core.common.Strings;
 import org.opensearch.core.common.io.stream.StreamInput;
 import org.opensearch.core.common.io.stream.StreamOutput;
 import org.opensearch.core.common.io.stream.Writeable;
-import org.opensearch.core.xcontent.MediaTypeRegistry;
-import org.opensearch.core.xcontent.ToXContent;
-import org.opensearch.core.xcontent.ToXContentObject;
-import org.opensearch.core.xcontent.XContentBuilder;
+import org.opensearch.core.tasks.resourcetracker.TaskResourceInfo;
+import org.opensearch.core.tasks.resourcetracker.TaskResourceUsage;
+import org.opensearch.core.xcontent.*;
+import org.opensearch.search.SearchHit;
+import org.opensearch.search.builder.SearchSourceBuilder;
+import org.opensearch.tasks.Task;
 
 /**
  * SearchQueryRecord represents a minimal atomic record stored in the Query Insight Framework,
  * which contains extensive information related to a search query.
  */
 public class SearchQueryRecord implements ToXContentObject, Writeable {
+    private static final Logger log = LogManager.getLogger(SearchQueryRecord.class);
     private final long timestamp;
     private final Map<MetricType, Number> measurements;
     private final Map<Attribute, Object> attributes;
+    public static final String TIMESTAMP = "timestamp";
+    public static final String LATENCY = "latency";
+    public static final String CPU = "cpu";
+    public static final String MEMORY = "memory";
+    public static final String SEARCH_TYPE = "search_type";
+    public static final String SOURCE = "source";
+    public static final String TOTAL_SHARDS = "total_shards";
+    public static final String INDICES = "indices";
+    public static final String PHASE_LATENCY_MAP = "phase_latency_map";
+    public static final String NODE_ID = "node_id";
+    public static final String TASK_RESOURCE_USAGES = "task_resource_usages";
+    public static final String LABELS = "labels";
 
     /**
      * Constructor of SearchQueryRecord
@@ -59,6 +77,115 @@ public class SearchQueryRecord implements ToXContentObject, Writeable {
         this.measurements = measurements;
         this.attributes = attributes;
         this.timestamp = timestamp;
+    }
+
+    public static SearchQueryRecord getRecord(SearchHit hit) throws IOException {
+        long timestamp = 0L;
+        Map<MetricType, Number> measurements = new HashMap<>();
+        Map<Attribute, Object> attributes = new HashMap<>();
+        XContentParser parser = XContentType.JSON.xContent().createParser(
+            NamedXContentRegistry.EMPTY,
+            LoggingDeprecationHandler.INSTANCE,
+            hit.getSourceAsString()
+        );
+        parser.nextToken();
+        XContentParserUtils.ensureExpectedToken(XContentParser.Token.START_OBJECT, parser.currentToken(), parser);
+        while (parser.nextToken() != XContentParser.Token.END_OBJECT) {
+            String fieldName = parser.currentName();
+            parser.nextToken();
+            switch (fieldName) {
+                case TIMESTAMP:
+                    timestamp = parser.longValue();
+                    break;
+                case LATENCY:
+                case CPU:
+                case MEMORY:
+                    MetricType metric = MetricType.fromString(fieldName);
+                    measurements.put(metric, metric.parseValue(parser.numberValue()));
+                    break;
+                case SEARCH_TYPE:
+                    attributes.put(Attribute.SEARCH_TYPE, parser.text());
+                    break;
+                case SOURCE:
+                    XContentParserUtils.ensureExpectedToken(XContentParser.Token.START_OBJECT, parser.currentToken(), parser);
+                    attributes.put(Attribute.SOURCE, SearchSourceBuilder.fromXContent(parser, false));
+                    break;
+                case TOTAL_SHARDS:
+                    attributes.put(Attribute.TOTAL_SHARDS, parser.intValue());
+                    break;
+                case INDICES:
+                    XContentParserUtils.ensureExpectedToken(XContentParser.Token.START_ARRAY, parser.currentToken(), parser);
+                    List<String> indices = new ArrayList<>();
+                    while (parser.nextToken() != XContentParser.Token.END_ARRAY) {
+                        indices.add(parser.text());
+                    }
+                    attributes.put(Attribute.INDICES, indices.toArray());
+                    break;
+                case PHASE_LATENCY_MAP:
+                    XContentParserUtils.ensureExpectedToken(XContentParser.Token.START_OBJECT, parser.currentToken(), parser);
+                    Map<String, Long> phaseLatencyMap = new HashMap<>();
+                    while (parser.nextToken() != XContentParser.Token.END_OBJECT) {
+                        String phase = parser.currentName();
+                        parser.nextToken();
+                        phaseLatencyMap.put(phase, parser.longValue());
+                    }
+                    attributes.put(Attribute.PHASE_LATENCY_MAP, phaseLatencyMap);
+                    break;
+                case NODE_ID:
+                    attributes.put(Attribute.NODE_ID, parser.text());
+                    break;
+                case TASK_RESOURCE_USAGES:
+                    XContentParserUtils.ensureExpectedToken(XContentParser.Token.START_ARRAY, parser.currentToken(), parser);
+                    List<TaskResourceInfo> tasksResourceUsages = new ArrayList<>();
+                    while (parser.nextToken() != XContentParser.Token.END_ARRAY) {
+                        String action = "";
+                        long taskId = 0L;
+                        long parentTaskId = 0L;
+                        String nodeId = "";
+                        TaskResourceUsage taskRU = new TaskResourceUsage(0L, 0L);
+                        XContentParserUtils.ensureExpectedToken(XContentParser.Token.START_OBJECT, parser.currentToken(), parser);
+                        while (parser.nextToken() != XContentParser.Token.END_OBJECT) {
+                            String usageFields = parser.currentName();
+                            parser.nextToken();
+                            switch (usageFields) {
+                                case "action":
+                                    action = parser.text();
+                                    break;
+                                case "taskId":
+                                    taskId = parser.longValue();
+                                    break;
+                                case "parentTaskId":
+                                    parentTaskId = parser.longValue();
+                                    break;
+                                case "nodeId":
+                                    nodeId = parser.text();
+                                    break;
+                                case "taskResourceUsage":
+                                    taskRU = TaskResourceUsage.fromXContent(parser);
+                                    break;
+                                default:
+                                    break;
+                            }
+                        }
+                        TaskResourceInfo resourceInfo = new TaskResourceInfo(action, taskId, parentTaskId, nodeId, taskRU);
+                        tasksResourceUsages.add(resourceInfo);
+                    }
+                    attributes.put(Attribute.TASK_RESOURCE_USAGES, tasksResourceUsages);
+                    break;
+                case LABELS:
+                    XContentParserUtils.ensureExpectedToken(XContentParser.Token.START_OBJECT, parser.currentToken(), parser);
+                    Map<String, Object> labels = new HashMap<>();
+                    while (parser.nextToken() != XContentParser.Token.END_OBJECT) {
+                        parser.nextToken();
+                        labels.put(Task.X_OPAQUE_ID, parser.text());
+                    }
+                    attributes.put(Attribute.LABELS, labels);
+                    break;
+                default:
+                    break;
+            }
+        }
+        return new SearchQueryRecord(timestamp, measurements, attributes);
     }
 
     /**
@@ -109,7 +236,7 @@ public class SearchQueryRecord implements ToXContentObject, Writeable {
     }
 
     @Override
-    public XContentBuilder toXContent(final XContentBuilder builder, final ToXContent.Params params) throws IOException {
+    public XContentBuilder toXContent(final XContentBuilder builder, final Params params) throws IOException {
         builder.startObject();
         builder.field("timestamp", timestamp);
         for (Map.Entry<Attribute, Object> entry : attributes.entrySet()) {

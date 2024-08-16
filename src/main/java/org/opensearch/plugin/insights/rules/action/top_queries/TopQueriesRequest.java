@@ -20,6 +20,8 @@ import org.opensearch.plugin.insights.rules.model.MetricType;
 public class TopQueriesRequest extends BaseNodesRequest<TopQueriesRequest> {
 
     final MetricType metricType;
+    final String from;
+    final String to;
 
     /**
      * Constructor for TopQueriesRequest
@@ -30,6 +32,8 @@ public class TopQueriesRequest extends BaseNodesRequest<TopQueriesRequest> {
     public TopQueriesRequest(final StreamInput in) throws IOException {
         super(in);
         this.metricType = MetricType.readFromStream(in);
+        this.from = null;
+        this.to = null;
     }
 
     /**
@@ -39,9 +43,11 @@ public class TopQueriesRequest extends BaseNodesRequest<TopQueriesRequest> {
      * @param metricType {@link MetricType}
      * @param nodesIds the nodeIds specified in the request
      */
-    public TopQueriesRequest(final MetricType metricType, final String... nodesIds) {
+    public TopQueriesRequest(final MetricType metricType, final String from, final String to, final String... nodesIds) {
         super(nodesIds);
         this.metricType = metricType;
+        this.from = from;
+        this.to = to;
     }
 
     /**
@@ -49,6 +55,10 @@ public class TopQueriesRequest extends BaseNodesRequest<TopQueriesRequest> {
      */
     public MetricType getMetricType() {
         return metricType;
+    }
+
+    public String[] getTimeRange() {
+        return new String[] {from, to};
     }
 
     @Override
