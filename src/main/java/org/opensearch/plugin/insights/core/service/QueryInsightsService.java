@@ -26,6 +26,7 @@ import org.opensearch.common.lifecycle.AbstractLifecycleComponent;
 import org.opensearch.common.settings.ClusterSettings;
 import org.opensearch.common.settings.Settings;
 import org.opensearch.common.unit.TimeValue;
+import org.opensearch.core.xcontent.NamedXContentRegistry;
 import org.opensearch.plugin.insights.core.exporter.QueryInsightsExporterFactory;
 import org.opensearch.plugin.insights.core.reader.QueryInsightsReaderFactory;
 import org.opensearch.plugin.insights.core.service.categorizer.SearchQueryCategorizer;
@@ -83,6 +84,7 @@ public class QueryInsightsService extends AbstractLifecycleComponent {
     private volatile boolean searchQueryMetricsEnabled;
 
     private SearchQueryCategorizer searchQueryCategorizer;
+    private NamedXContentRegistry namedXContentRegistry;
 
     /**
      * Constructor of the QueryInsightsService
@@ -97,13 +99,15 @@ public class QueryInsightsService extends AbstractLifecycleComponent {
         final ClusterSettings clusterSettings,
         final ThreadPool threadPool,
         final Client client,
-        final MetricsRegistry metricsRegistry
-    ) {
+        final MetricsRegistry metricsRegistry,
+        final NamedXContentRegistry namedXContentRegistry
+        ) {
         enableCollect = new HashMap<>();
         queryRecordsQueue = new LinkedBlockingQueue<>(QueryInsightsSettings.QUERY_RECORD_QUEUE_CAPACITY);
         this.threadPool = threadPool;
         this.queryInsightsExporterFactory = new QueryInsightsExporterFactory(client);
         this.queryInsightsReaderFactory = new QueryInsightsReaderFactory(client);
+        this.namedXContentRegistry = namedXContentRegistry;
         // initialize top n queries services and configurations consumers
         topQueriesServices = new HashMap<>();
         for (MetricType metricType : MetricType.allMetricTypes()) {
@@ -311,7 +315,7 @@ public class QueryInsightsService extends AbstractLifecycleComponent {
         if (topQueriesServices.containsKey(type)) {
             TopQueriesService tqs = topQueriesServices.get(type);
             tqs.setExporter(settings);
-            tqs.setReader(settings);
+            tqs.setReader(settings, namedXContentRegistry);
         }
     }
 

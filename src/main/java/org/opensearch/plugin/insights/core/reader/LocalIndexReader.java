@@ -24,6 +24,7 @@ import org.opensearch.common.unit.TimeValue;
 import org.opensearch.common.xcontent.XContentFactory;
 import org.opensearch.common.xcontent.XContentType;
 import org.opensearch.core.action.ActionListener;
+import org.opensearch.core.xcontent.NamedXContentRegistry;
 import org.opensearch.core.xcontent.ToXContent;
 import org.opensearch.core.xcontent.XContentParser;
 import org.opensearch.index.query.QueryBuilders;
@@ -45,6 +46,7 @@ public final class LocalIndexReader implements QueryInsightsReader {
     private final Logger logger = LogManager.getLogger();
     private final Client client;
     private DateTimeFormatter indexPattern;
+    private NamedXContentRegistry namedXContentRegistry;
 
     /**
      * Constructor of LocalIndexReader
@@ -52,9 +54,10 @@ public final class LocalIndexReader implements QueryInsightsReader {
      * @param client OS client
      * @param indexPattern the pattern of index to read from
      */
-    public LocalIndexReader(final Client client, final DateTimeFormatter indexPattern) {
+    public LocalIndexReader(final Client client, final DateTimeFormatter indexPattern, NamedXContentRegistry namedXContentRegistry) {
         this.indexPattern = indexPattern;
         this.client = client;
+        this.namedXContentRegistry = namedXContentRegistry;
     }
 
     /**
@@ -97,7 +100,7 @@ public final class LocalIndexReader implements QueryInsightsReader {
                 searchRequest.source(searchSourceBuilder);
                 SearchResponse searchResponse = client.search(searchRequest).actionGet();
                 for (SearchHit hit : searchResponse.getHits()) {
-                    SearchQueryRecord record = SearchQueryRecord.getRecord(hit);
+                    SearchQueryRecord record = SearchQueryRecord.getRecord(hit, namedXContentRegistry);
                     records.add(record);
                 }
                 curr = curr.plusDays(1);

@@ -26,6 +26,7 @@ import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.opensearch.common.settings.Settings;
 import org.opensearch.common.unit.TimeValue;
+import org.opensearch.core.xcontent.NamedXContentRegistry;
 import org.opensearch.plugin.insights.core.exporter.QueryInsightsExporter;
 import org.opensearch.plugin.insights.core.exporter.QueryInsightsExporterFactory;
 import org.opensearch.plugin.insights.core.exporter.SinkType;
@@ -248,8 +249,8 @@ public class TopQueriesService {
      *
      * @param settings reader config {@link Settings}
      */
-    public void setReader(final Settings settings) {
-        this.reader = queryInsightsReaderFactory.createReader(settings.get(EXPORT_INDEX, DEFAULT_TOP_N_QUERIES_INDEX_PATTERN));
+    public void setReader(final Settings settings, NamedXContentRegistry namedXContentRegistry) {
+        this.reader = queryInsightsReaderFactory.createReader(settings.get(EXPORT_INDEX, DEFAULT_TOP_N_QUERIES_INDEX_PATTERN), namedXContentRegistry);
         queryInsightsReaderFactory.updateReader(reader, settings.get(EXPORT_INDEX, DEFAULT_TOP_N_QUERIES_INDEX_PATTERN));
     }
 

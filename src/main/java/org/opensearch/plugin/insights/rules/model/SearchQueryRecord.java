@@ -79,12 +79,13 @@ public class SearchQueryRecord implements ToXContentObject, Writeable {
         this.timestamp = timestamp;
     }
 
-    public static SearchQueryRecord getRecord(SearchHit hit) throws IOException {
+    public static SearchQueryRecord getRecord(SearchHit hit, NamedXContentRegistry namedXContentRegistry) throws IOException {
         long timestamp = 0L;
         Map<MetricType, Number> measurements = new HashMap<>();
         Map<Attribute, Object> attributes = new HashMap<>();
         XContentParser parser = XContentType.JSON.xContent().createParser(
-            NamedXContentRegistry.EMPTY,
+//            NamedXContentRegistry.EMPTY,
+            namedXContentRegistry,
             LoggingDeprecationHandler.INSTANCE,
             hit.getSourceAsString()
         );

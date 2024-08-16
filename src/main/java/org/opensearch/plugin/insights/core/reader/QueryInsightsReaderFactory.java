@@ -17,6 +17,7 @@ import org.apache.logging.log4j.Logger;
 import org.joda.time.format.DateTimeFormat;
 import org.opensearch.client.Client;
 import org.opensearch.common.settings.Settings;
+import org.opensearch.core.xcontent.NamedXContentRegistry;
 
 import static org.opensearch.plugin.insights.settings.QueryInsightsSettings.*;
 
@@ -67,8 +68,8 @@ public class QueryInsightsReaderFactory {
      * @param indexPattern the index pattern if creating an index Reader
      * @return QueryInsightsReader the created Reader
      */
-    public QueryInsightsReader createReader(String indexPattern) {
-        QueryInsightsReader Reader = new LocalIndexReader(client, DateTimeFormat.forPattern(indexPattern));
+    public QueryInsightsReader createReader(String indexPattern, NamedXContentRegistry namedXContentRegistry) {
+        QueryInsightsReader Reader = new LocalIndexReader(client, DateTimeFormat.forPattern(indexPattern), namedXContentRegistry);
         this.Readers.add(Reader);
         return Reader;
     }
