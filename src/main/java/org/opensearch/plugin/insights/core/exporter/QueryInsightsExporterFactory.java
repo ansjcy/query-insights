@@ -8,20 +8,20 @@
 
 package org.opensearch.plugin.insights.core.exporter;
 
-import static org.opensearch.plugin.insights.settings.QueryInsightsSettings.DEFAULT_TOP_QUERIES_EXPORTER_TYPE;
-import static org.opensearch.plugin.insights.settings.QueryInsightsSettings.EXPORTER_TYPE;
-
 import java.io.IOException;
 import java.time.format.DateTimeFormatter;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Set;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.opensearch.client.Client;
-import org.opensearch.common.settings.Settings;
+import org.opensearch.cluster.service.ClusterService;
 import org.opensearch.plugin.insights.core.metrics.OperationalMetric;
 import org.opensearch.plugin.insights.core.metrics.OperationalMetricsCounter;
+import org.opensearch.plugin.insights.core.reader.QueryInsightsReader;
 
 /**
  * Factory class for validating and creating exporters based on provided settings
@@ -32,39 +32,40 @@ public class QueryInsightsExporterFactory {
      */
     private final Logger logger = LogManager.getLogger();
     final private Client client;
-    final private Set<QueryInsightsExporter> exporters;
+    final private ClusterService clusterService;
+    final private Map<String, QueryInsightsExporter> exporters;
 
     /**
      * Constructor of QueryInsightsExporterFactory
      *
      * @param client OS client
      */
-    public QueryInsightsExporterFactory(final Client client) {
+    public QueryInsightsExporterFactory(final Client client, final ClusterService clusterService) {
         this.client = client;
-        this.exporters = new HashSet<>();
+        this.clusterService = clusterService;
+        this.exporters = new HashMap<>();
     }
 
     /**
      * Validate exporter sink config
      *
-     * @param settings exporter sink config {@link Settings}
+     * @param exporterType exporter sink type
      * @throws IllegalArgumentException if provided exporter sink config settings are invalid
      */
-    public void validateExporterConfig(final Settings settings) throws IllegalArgumentException {
+    public void validateExporterType(final String exporterType) throws IllegalArgumentException {
         // Disable exporter if the EXPORTER_TYPE setting is null
-        if (settings.get(EXPORTER_TYPE) == null) {
+        if (exporterType == null) {
             return;
         }
-        SinkType type;
         try {
-            type = SinkType.parse(settings.get(EXPORTER_TYPE, DEFAULT_TOP_QUERIES_EXPORTER_TYPE));
+            SinkType.parse(exporterType);
         } catch (IllegalArgumentException e) {
             OperationalMetricsCounter.getInstance().incrementCounter(OperationalMetric.INVALID_EXPORTER_TYPE_FAILURES);
             throw new IllegalArgumentException(
                 String.format(
                     Locale.ROOT,
                     "Invalid exporter type [%s], type should be one of %s",
-                    settings.get(EXPORTER_TYPE),
+                    exporterType,
                     SinkType.allSinkTypes()
                 )
             );
@@ -78,10 +79,10 @@ public class QueryInsightsExporterFactory {
      * @param indexPattern the index pattern if creating a index exporter
      * @return QueryInsightsExporter the created exporter sink
      */
-    public QueryInsightsExporter createExporter(SinkType type, String indexPattern) {
+    public QueryInsightsExporter createExporter(String id, SinkType type, String indexPattern, String indexMapping) {
         if (SinkType.LOCAL_INDEX.equals(type)) {
-            QueryInsightsExporter exporter = new LocalIndexExporter(client, DateTimeFormatter.ofPattern(indexPattern, Locale.ROOT));
-            this.exporters.add(exporter);
+            QueryInsightsExporter exporter = new LocalIndexExporter(client, clusterService, DateTimeFormatter.ofPattern(indexPattern, Locale.ROOT), indexMapping, id);
+            this.exporters.put(id, exporter);
             return exporter;
         }
         return DebugExporter.getInstance();
@@ -102,6 +103,15 @@ public class QueryInsightsExporterFactory {
     }
 
     /**
+     * Get a exporter by id
+     * @param id The id of the exporter
+     * @return QueryInsightsReader the Reader
+     */
+    public QueryInsightsExporter getExporter(String id) {
+        return this.exporters.get(id);
+    }
+
+    /**
      * Close an exporter
      *
      * @param exporter the exporter to close
@@ -110,7 +120,7 @@ public class QueryInsightsExporterFactory {
     public void closeExporter(QueryInsightsExporter exporter) throws IOException {
         if (exporter != null) {
             exporter.close();
-            this.exporters.remove(exporter);
+            this.exporters.remove(exporter.getId());
         }
     }
 
@@ -119,7 +129,7 @@ public class QueryInsightsExporterFactory {
      *
      */
     public void closeAllExporters() {
-        for (QueryInsightsExporter exporter : exporters) {
+        for (QueryInsightsExporter exporter : exporters.values()) {
             try {
                 closeExporter(exporter);
             } catch (IOException e) {

@@ -10,8 +10,10 @@ package org.opensearch.plugin.insights.core.reader;
 
 import java.io.IOException;
 import java.time.format.DateTimeFormatter;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Set;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
@@ -27,7 +29,7 @@ public class QueryInsightsReaderFactory {
      */
     private final Logger logger = LogManager.getLogger();
     final private Client client;
-    final private Set<QueryInsightsReader> Readers;
+    final private Map<String, QueryInsightsReader> readers;
 
     /**
      * Constructor of QueryInsightsReaderFactory
@@ -36,7 +38,7 @@ public class QueryInsightsReaderFactory {
      */
     public QueryInsightsReaderFactory(final Client client) {
         this.client = client;
-        this.Readers = new HashSet<>();
+        this.readers = new HashMap<>();
     }
 
     /**
@@ -46,28 +48,38 @@ public class QueryInsightsReaderFactory {
      * @param namedXContentRegistry for parsing purposes
      * @return QueryInsightsReader the created Reader
      */
-    public QueryInsightsReader createReader(String indexPattern, NamedXContentRegistry namedXContentRegistry) {
-        QueryInsightsReader Reader = new LocalIndexReader(
+    public QueryInsightsReader createReader(String id, String indexPattern, NamedXContentRegistry namedXContentRegistry) {
+        QueryInsightsReader reader = new LocalIndexReader(
             client,
             DateTimeFormatter.ofPattern(indexPattern, Locale.ROOT),
-            namedXContentRegistry
+            namedXContentRegistry,
+            id
         );
-        this.Readers.add(Reader);
-        return Reader;
+        this.readers.put(id, reader);
+        return reader;
     }
 
     /**
-     * Update a Reader based on provided parameters
+     * Update a reader based on provided parameters
      *
-     * @param Reader The Reader to update
-     * @param indexPattern the index pattern if creating an index Reader
-     * @return QueryInsightsReader the updated Reader sink
+     * @param reader The reader to update
+     * @param indexPattern the index pattern if creating an index reader
+     * @return QueryInsightsReader the updated reader sink
      */
-    public QueryInsightsReader updateReader(QueryInsightsReader Reader, String indexPattern) {
-        if (Reader.getClass() == LocalIndexReader.class) {
-            ((LocalIndexReader) Reader).setIndexPattern(DateTimeFormatter.ofPattern(indexPattern, Locale.ROOT));
+    public QueryInsightsReader updateReader(QueryInsightsReader reader, String indexPattern) {
+        if (reader.getClass() == LocalIndexReader.class) {
+            ((LocalIndexReader) reader).setIndexPattern(DateTimeFormatter.ofPattern(indexPattern, Locale.ROOT));
         }
-        return Reader;
+        return reader;
+    }
+
+    /**
+     * Get a Reader by id
+     * @param id The id of the reader
+     * @return QueryInsightsReader the Reader
+     */
+    public QueryInsightsReader getReader(String id) {
+        return this.readers.get(id);
     }
 
     /**
@@ -78,7 +90,7 @@ public class QueryInsightsReaderFactory {
     public void closeReader(QueryInsightsReader Reader) throws IOException {
         if (Reader != null) {
             Reader.close();
-            this.Readers.remove(Reader);
+            this.readers.remove(Reader.getId());
         }
     }
 
@@ -87,9 +99,9 @@ public class QueryInsightsReaderFactory {
      *
      */
     public void closeAllReaders() {
-        for (QueryInsightsReader Reader : Readers) {
+        for (QueryInsightsReader reader : readers.values()) {
             try {
-                closeReader(Reader);
+                closeReader(reader);
             } catch (IOException e) {
                 logger.error("Fail to close query insights Reader, error: ", e);
             }

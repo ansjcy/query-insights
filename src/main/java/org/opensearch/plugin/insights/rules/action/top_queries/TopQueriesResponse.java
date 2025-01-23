@@ -81,7 +81,6 @@ public class TopQueriesResponse extends BaseNodesResponse<TopQueries> implements
     @Override
     public XContentBuilder toXContent(final XContentBuilder builder, final Params params) throws IOException {
         final List<TopQueries> results = getNodes();
-        postProcess(results);
         builder.startObject();
         toClusterLevelResult(builder, params, results);
         return builder.endObject();
@@ -97,20 +96,6 @@ public class TopQueriesResponse extends BaseNodesResponse<TopQueries> implements
             return builder.toString();
         } catch (IOException e) {
             return "{ \"error\" : \"" + e.getMessage() + "\"}";
-        }
-    }
-
-    /**
-     * Post process the top queries results to add customized attributes
-     *
-     * @param results the top queries results
-     */
-    private void postProcess(final List<TopQueries> results) {
-        for (TopQueries topQueries : results) {
-            final String nodeId = topQueries.getNode().getId();
-            for (SearchQueryRecord record : topQueries.getTopQueriesRecord()) {
-                record.addAttribute(Attribute.NODE_ID, nodeId);
-            }
         }
     }
 

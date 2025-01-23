@@ -313,6 +313,9 @@ public class SearchQueryRecord implements ToXContentObject, Writeable {
      * @return the measurement object, or null if not found
      */
     public Number getMeasurement(final MetricType name) {
+        if (!measurements.containsKey(name)) {
+            return null;
+        }
         return measurements.get(name).getMeasurement();
     }
 
@@ -328,6 +331,10 @@ public class SearchQueryRecord implements ToXContentObject, Writeable {
      * @param numberToAdd The measurement number we want to add to the current measurement.
      */
     public void addMeasurement(final MetricType metricType, Number numberToAdd) {
+        if (!measurements.containsKey(metricType)) {
+            measurements.put(metricType, new Measurement(numberToAdd));
+            return;
+        }
         measurements.get(metricType).addMeasurement(numberToAdd);
     }
 
@@ -337,6 +344,9 @@ public class SearchQueryRecord implements ToXContentObject, Writeable {
      * @param aggregationType Aggregation type to set
      */
     public void setMeasurementAggregation(final MetricType name, AggregationType aggregationType) {
+        if (!measurements.containsKey(name)) {
+            return;
+        }
         measurements.get(name).setAggregationType(aggregationType);
     }
 
@@ -361,6 +371,14 @@ public class SearchQueryRecord implements ToXContentObject, Writeable {
      */
     public void addAttribute(final Attribute attribute, final Object value) {
         attributes.put(attribute, value);
+    }
+
+    /**
+     * Get the unique id of this record
+     * @return id
+     */
+    public String getId() {
+        return id;
     }
 
     @Override

@@ -11,6 +11,8 @@ package org.opensearch.plugin.insights.core.exporter;
 import static org.opensearch.plugin.insights.core.service.TopQueriesService.isTopQueriesIndex;
 import static org.opensearch.plugin.insights.settings.QueryInsightsSettings.DEFAULT_DELETE_AFTER_VALUE;
 
+import java.io.IOException;
+import java.nio.charset.Charset;
 import java.time.Instant;
 import java.time.ZoneOffset;
 import java.time.ZonedDateTime;
@@ -18,14 +20,21 @@ import java.time.format.DateTimeFormatter;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Objects;
 import java.util.concurrent.TimeUnit;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
+import org.opensearch.ResourceAlreadyExistsException;
+import org.opensearch.action.admin.indices.create.CreateIndexRequest;
+import org.opensearch.action.admin.indices.create.CreateIndexResponse;
 import org.opensearch.action.bulk.BulkRequestBuilder;
 import org.opensearch.action.bulk.BulkResponse;
 import org.opensearch.action.index.IndexRequest;
 import org.opensearch.client.Client;
+import org.opensearch.cluster.ClusterState;
 import org.opensearch.cluster.metadata.IndexMetadata;
+import org.opensearch.cluster.service.ClusterService;
+import org.opensearch.common.settings.Settings;
 import org.opensearch.common.unit.TimeValue;
 import org.opensearch.common.xcontent.XContentFactory;
 import org.opensearch.core.action.ActionListener;
@@ -44,8 +53,24 @@ public final class LocalIndexExporter implements QueryInsightsExporter {
      */
     private final Logger logger = LogManager.getLogger();
     private final Client client;
+    private final ClusterService clusterService;
+    private final String indexMapping;
     private DateTimeFormatter indexPattern;
     private int deleteAfter;
+    private final String id;
+
+    private static final int DEFAULT_NUMBER_OF_REPLICA = 1;
+    private static final int DEFAULT_NUMBER_OF_SHARDS = 1;
+    private static final List<String> DEFAULT_SORTED_FIELDS = List.of(
+        "measurements.latency.number",
+        "measurements.cpu.number",
+        "measurements.memory.number"
+    );
+    private static final List<String> DEFAULT_SORTED_ORDERS  = List.of(
+        "desc",
+        "desc",
+        "desc"
+    );
 
     /**
      * Constructor of LocalIndexExporter
@@ -53,10 +78,18 @@ public final class LocalIndexExporter implements QueryInsightsExporter {
      * @param client OS client
      * @param indexPattern the pattern of index to export to
      */
-    public LocalIndexExporter(final Client client, final DateTimeFormatter indexPattern) {
+    public LocalIndexExporter(final Client client, final ClusterService clusterService, final DateTimeFormatter indexPattern, final String indexMapping, final String id) {
         this.indexPattern = indexPattern;
         this.client = client;
+        this.clusterService = clusterService;
+        this.indexMapping = indexMapping;
+        this.id = id;
         this.deleteAfter = DEFAULT_DELETE_AFTER_VALUE;
+    }
+
+    @Override
+    public String getId() {
+        return id;
     }
 
     /**
@@ -89,26 +122,71 @@ public final class LocalIndexExporter implements QueryInsightsExporter {
         }
         try {
             final String indexName = buildLocalIndexName();
-            final BulkRequestBuilder bulkRequestBuilder = client.prepareBulk().setTimeout(TimeValue.timeValueMinutes(1));
-            for (SearchQueryRecord record : records) {
-                bulkRequestBuilder.add(
-                    new IndexRequest(indexName).source(record.toXContent(XContentFactory.jsonBuilder(), ToXContent.EMPTY_PARAMS))
-                );
-            }
-            bulkRequestBuilder.execute(new ActionListener<BulkResponse>() {
-                @Override
-                public void onResponse(BulkResponse bulkItemResponses) {}
 
-                @Override
-                public void onFailure(Exception e) {
-                    OperationalMetricsCounter.getInstance().incrementCounter(OperationalMetric.LOCAL_INDEX_EXPORTER_BULK_FAILURES);
-                    logger.error("Failed to execute bulk operation for query insights data: ", e);
-                }
-            });
+            if (!checkIndexExists(indexName)) {
+                CreateIndexRequest createIndexRequest = new CreateIndexRequest(indexName);
+
+                createIndexRequest.settings(Settings.builder()
+                    .putList("index.sort.field", DEFAULT_SORTED_FIELDS)
+                    .putList("index.sort.order", DEFAULT_SORTED_ORDERS)
+                    .put("index.number_of_shards", DEFAULT_NUMBER_OF_SHARDS)
+                    .put("index.number_of_replicas", DEFAULT_NUMBER_OF_REPLICA)
+                );
+                createIndexRequest.mapping(readIndexMappings());
+
+                client.admin().indices().create(createIndexRequest, new ActionListener<>() {
+                    @Override
+                    public void onResponse(CreateIndexResponse createIndexResponse) {
+                        if (createIndexResponse.isAcknowledged()) {
+                            try {
+                                bulk(indexName, records);
+                            } catch (IOException e) {
+                                OperationalMetricsCounter.getInstance().incrementCounter(OperationalMetric.LOCAL_INDEX_EXPORTER_EXCEPTIONS);
+                                logger.error("Unable to index query insights data: ", e);
+                            }
+                        }
+                    }
+                    @Override
+                    public void onFailure(Exception e) {
+                        if (e instanceof ResourceAlreadyExistsException) {
+                            try {
+                                bulk(indexName, records);
+                            } catch (IOException ex) {
+                                OperationalMetricsCounter.getInstance().incrementCounter(OperationalMetric.LOCAL_INDEX_EXPORTER_EXCEPTIONS);
+                                logger.error("Unable to index query insights data: ", e);
+                            }
+                        } else {
+                            OperationalMetricsCounter.getInstance().incrementCounter(OperationalMetric.LOCAL_INDEX_EXPORTER_EXCEPTIONS);
+                            logger.error("Unable to create query insights index: ", e);
+                        }
+                    }
+                });
+            } else {
+                bulk(indexName, records);
+            }
         } catch (final Exception e) {
             OperationalMetricsCounter.getInstance().incrementCounter(OperationalMetric.LOCAL_INDEX_EXPORTER_EXCEPTIONS);
             logger.error("Unable to index query insights data: ", e);
         }
+    }
+
+    private void bulk (final String indexName, final List<SearchQueryRecord> records) throws IOException {
+        final BulkRequestBuilder bulkRequestBuilder = client.prepareBulk().setTimeout(TimeValue.timeValueMinutes(1));
+        for (SearchQueryRecord record : records) {
+            bulkRequestBuilder.add(
+                new IndexRequest(indexName).id(record.getId()).source(record.toXContent(XContentFactory.jsonBuilder(), ToXContent.EMPTY_PARAMS))
+            );
+        }
+        bulkRequestBuilder.execute(new ActionListener<BulkResponse>() {
+            @Override
+            public void onResponse(BulkResponse bulkItemResponses) {}
+
+            @Override
+            public void onFailure(Exception e) {
+                OperationalMetricsCounter.getInstance().incrementCounter(OperationalMetric.LOCAL_INDEX_EXPORTER_BULK_FAILURES);
+                logger.error("Failed to execute bulk operation for query insights data: ", e);
+            }
+        });
     }
 
     /**
@@ -146,7 +224,7 @@ public final class LocalIndexExporter implements QueryInsightsExporter {
         long expirationMillisLong = System.currentTimeMillis() - TimeUnit.DAYS.toMillis(deleteAfter);
         for (Map.Entry<String, IndexMetadata> entry : indexMetadataMap.entrySet()) {
             String indexName = entry.getKey();
-            if (isTopQueriesIndex(indexName) && entry.getValue().getCreationDate() <= expirationMillisLong) {
+            if (isTopQueriesIndex(indexName, entry.getValue()) && entry.getValue().getCreationDate() <= expirationMillisLong) {
                 // delete this index
                 TopQueriesService.deleteSingleIndex(indexName, client);
             }
@@ -166,5 +244,27 @@ public final class LocalIndexExporter implements QueryInsightsExporter {
 
         // Generate a 5-digit numeric hash from the date's hashCode
         return String.format(Locale.ROOT, "%05d", (currentDate.hashCode() % 100000 + 100000) % 100000);
+    }
+
+    /**
+     * check if index exists
+     * @return boolean
+     */
+    private boolean checkIndexExists(String indexName) {
+        ClusterState clusterState = clusterService.state();
+        return clusterState.getRoutingTable().hasIndex(indexName);
+    }
+
+    /**
+     * get correlation rule index mappings
+     * @return mappings of correlation rule index
+     * @throws IOException IOException
+     */
+    private String readIndexMappings() throws IOException {
+        return new String(
+            Objects.requireNonNull(LocalIndexExporter.class.getClassLoader().getResourceAsStream(indexMapping))
+                .readAllBytes(),
+            Charset.defaultCharset()
+        );
     }
 }
