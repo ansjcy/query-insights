@@ -20,6 +20,7 @@ import org.opensearch.cluster.service.ClusterService;
 import org.opensearch.common.settings.ClusterSettings;
 import org.opensearch.common.settings.Settings;
 import org.opensearch.plugin.insights.core.metrics.OperationalMetricsCounter;
+import org.opensearch.plugin.insights.settings.QueryInsightsSettings;
 import org.opensearch.telemetry.metrics.Counter;
 import org.opensearch.telemetry.metrics.MetricsRegistry;
 import org.opensearch.test.ClusterServiceUtils;
@@ -91,6 +92,30 @@ public class QueryInsightsExporterFactoryTests extends OpenSearchTestCase {
         );
         queryInsightsExporterFactory.updateExporter(exporter, "yyyy-MM-dd-HH");
         assertEquals(DateTimeFormatter.ofPattern("yyyy-MM-dd-HH", Locale.ROOT).toString(), exporter.getIndexPattern().toString());
+    }
+
+    public void testCreateLocalIndexExporterWithPriority() {
+        QueryInsightsExporterFactory factory = new QueryInsightsExporterFactory(client, clusterService);
+        LocalIndexExporter exporter = factory.createLocalIndexExporter("test-id", "YYYY.MM.dd", "mapping.json", 3000L);
+
+        assertEquals(3000L, exporter.getTemplatePriority());
+        assertEquals("test-id", exporter.getId());
+        assertNotNull(exporter.getIndexPattern());
+    }
+
+    public void testUpdateExporterWithPriority() {
+        QueryInsightsExporterFactory factory = new QueryInsightsExporterFactory(client, clusterService);
+        LocalIndexExporter exporter = factory.createLocalIndexExporter("test-id", "YYYY.MM.dd", "mapping.json");
+
+        // Default priority should be used
+        assertEquals(QueryInsightsSettings.DEFAULT_TEMPLATE_PRIORITY, exporter.getTemplatePriority());
+
+        // Update with new priority
+        factory.updateExporter(exporter, "YYYY-MM-dd", 5000L);
+
+        assertEquals(5000L, exporter.getTemplatePriority());
+        assertNotEquals("YYYY.MM.dd", exporter.getIndexPattern().toString());
+        assertEquals("YYYY-MM-dd", exporter.getIndexPattern().toString());
     }
 
 }
