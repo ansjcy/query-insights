@@ -30,8 +30,6 @@ import org.opensearch.ResourceAlreadyExistsException;
 import org.opensearch.action.admin.indices.create.CreateIndexRequest;
 import org.opensearch.action.admin.indices.create.CreateIndexResponse;
 import org.opensearch.action.admin.indices.delete.DeleteIndexRequest;
-import org.opensearch.action.admin.indices.exists.indices.IndicesExistsRequest;
-import org.opensearch.action.admin.indices.exists.indices.IndicesExistsResponse;
 import org.opensearch.action.admin.indices.template.get.GetComposableIndexTemplateAction;
 import org.opensearch.action.admin.indices.template.put.PutComposableIndexTemplateAction;
 import org.opensearch.action.bulk.BulkRequestBuilder;
@@ -46,15 +44,12 @@ import org.opensearch.common.compress.CompressedXContent;
 import org.opensearch.common.settings.Settings;
 import org.opensearch.common.unit.TimeValue;
 import org.opensearch.common.xcontent.XContentFactory;
-import org.opensearch.common.xcontent.XContentType;
 import org.opensearch.core.action.ActionListener;
 import org.opensearch.core.xcontent.ToXContent;
 import org.opensearch.index.IndexNotFoundException;
 import org.opensearch.plugin.insights.core.metrics.OperationalMetric;
 import org.opensearch.plugin.insights.core.metrics.OperationalMetricsCounter;
 import org.opensearch.plugin.insights.rules.model.SearchQueryRecord;
-
-import java.util.Map;
 
 /**
  * Local index exporter for exporting query insights data to local OpenSearch indices.
@@ -152,7 +147,7 @@ public class LocalIndexExporter implements QueryInsightsExporter {
                         logger.error("Error ensuring template exists:", templateException);
                         OperationalMetricsCounter.getInstance().incrementCounter(OperationalMetric.LOCAL_INDEX_EXPORTER_EXCEPTIONS);
                     }
-                    
+
                     // Proceed with index creation even if there was a template error
                     // The template might already exist or might be created by another node
                     try {
@@ -174,7 +169,7 @@ public class LocalIndexExporter implements QueryInsightsExporter {
 
     /**
      * Creates an index with the specified name and exports records to it
-     * 
+     *
      * @param indexName Name of the index to create
      * @param records Records to export
      * @throws IOException If there's an error reading mappings
@@ -338,16 +333,14 @@ public class LocalIndexExporter implements QueryInsightsExporter {
     /**
      * Ensures that the template exists. This method first checks if the template exists and
      * only creates it if it doesn't.
-     * 
+     *
      * @return CompletableFuture that completes when the template check/creation is done
      */
     private CompletableFuture<Boolean> ensureTemplateExists() {
         CompletableFuture<Boolean> future = new CompletableFuture<>();
-        String indexPattern = TOP_QUERIES_INDEX_PATTERN_GLOB;
-
         // First check if the template already exists
-        GetComposableIndexTemplateAction.Request getRequest = new GetComposableIndexTemplateAction.Request(TEMPLATE_NAME);
-        
+        GetComposableIndexTemplateAction.Request getRequest = new GetComposableIndexTemplateAction.Request();
+
         client.execute(
             GetComposableIndexTemplateAction.INSTANCE,
             getRequest,
@@ -360,7 +353,7 @@ public class LocalIndexExporter implements QueryInsightsExporter {
                         future.complete(true);
                         return;
                     }
-                    
+
                     // Template doesn't exist, create it
                     createTemplate(future);
                 }
@@ -373,13 +366,13 @@ public class LocalIndexExporter implements QueryInsightsExporter {
                 }
             }
         );
-        
+
         return future;
     }
-    
+
     /**
      * Helper method to create the template
-     * 
+     *
      * @param future The CompletableFuture to complete when done
      */
     private void createTemplate(CompletableFuture<Boolean> future) {
@@ -419,25 +412,25 @@ public class LocalIndexExporter implements QueryInsightsExporter {
                     @Override
                     public void onResponse(AcknowledgedResponse response) {
                         if (response.isAcknowledged()) {
-                            logger.info("Successfully created or updated V2 template [{}] with priority {}",
+                            logger.info("Successfully created or updated template [{}] with priority {}",
                                 TEMPLATE_NAME, templatePriority);
                             future.complete(true);
                         } else {
-                            logger.warn("Failed to create or update V2 template [{}]", TEMPLATE_NAME);
+                            logger.warn("Failed to create or update template [{}]", TEMPLATE_NAME);
                             future.complete(false);
                         }
                     }
 
                     @Override
                     public void onFailure(Exception e) {
-                        logger.error("Error creating or updating V2 template [{}]", TEMPLATE_NAME, e);
+                        logger.error("Error creating or updating template [{}]", TEMPLATE_NAME, e);
                         OperationalMetricsCounter.getInstance().incrementCounter(OperationalMetric.LOCAL_INDEX_EXPORTER_EXCEPTIONS);
                         future.completeExceptionally(e);
                     }
                 }
             );
         } catch (Exception e) {
-            logger.error("Failed to manage V2 template", e);
+            logger.error("Failed to manage template", e);
             OperationalMetricsCounter.getInstance().incrementCounter(OperationalMetric.LOCAL_INDEX_EXPORTER_EXCEPTIONS);
             future.completeExceptionally(e);
         }
