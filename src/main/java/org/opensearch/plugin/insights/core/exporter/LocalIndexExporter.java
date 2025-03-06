@@ -21,6 +21,7 @@ import java.time.format.DateTimeFormatter;
 import java.util.Collections;
 import java.util.List;
 import java.util.Objects;
+import java.util.concurrent.CompletableFuture;
 
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
@@ -29,6 +30,9 @@ import org.opensearch.ResourceAlreadyExistsException;
 import org.opensearch.action.admin.indices.create.CreateIndexRequest;
 import org.opensearch.action.admin.indices.create.CreateIndexResponse;
 import org.opensearch.action.admin.indices.delete.DeleteIndexRequest;
+import org.opensearch.action.admin.indices.exists.indices.IndicesExistsRequest;
+import org.opensearch.action.admin.indices.exists.indices.IndicesExistsResponse;
+import org.opensearch.action.admin.indices.template.get.GetComposableIndexTemplateAction;
 import org.opensearch.action.admin.indices.template.put.PutComposableIndexTemplateAction;
 import org.opensearch.action.bulk.BulkRequestBuilder;
 import org.opensearch.action.bulk.BulkResponse;
@@ -142,109 +146,78 @@ public class LocalIndexExporter implements QueryInsightsExporter {
         try {
             final String indexName = buildLocalIndexName();
             if (!checkIndexExists(indexName)) {
-                // Create template with fixed priority
-//                ensureTemplateExists();
-                String indexPattern = TOP_QUERIES_INDEX_PATTERN_GLOB;
-                try {
-                    // Create a V2 template (ComposableIndexTemplate)
-                    CompressedXContent compressedMapping = new CompressedXContent(readIndexMappings());
-
-                    // Create template component
-                    org.opensearch.cluster.metadata.Template template = new org.opensearch.cluster.metadata.Template(
-                        Settings.builder()
-                            .put("index.number_of_shards", DEFAULT_NUMBER_OF_SHARDS)
-                            .put("index.number_of_replicas", DEFAULT_NUMBER_OF_REPLICA)
-                            .build(),
-                        compressedMapping,
-                        null
-                    );
-
-                    // Create the composable template
-                    ComposableIndexTemplate composableTemplate =
-                        new ComposableIndexTemplate(
-                            Collections.singletonList(indexPattern),
-                            template,
-                            null, // No composed_of templates
-                            templatePriority, // Priority using configured value
-                            null,
-                            null
-                        );
-
-                    // Use the V2 API to put the template
-                    PutComposableIndexTemplateAction.Request request = new PutComposableIndexTemplateAction.Request(TEMPLATE_NAME)
-                        .indexTemplate(composableTemplate);
-
-                    client.execute(
-                        PutComposableIndexTemplateAction.INSTANCE,
-                        request,
-                        new ActionListener<>() {
-                            @Override
-                            public void onResponse(AcknowledgedResponse response) {
-                                if (response.isAcknowledged()) {
-                                    logger.info("Successfully created or updated V2 template [{}] with priority {}",
-                                        TEMPLATE_NAME, templatePriority);
-                                } else {
-                                    logger.warn("Failed to create or update V2 template [{}]", TEMPLATE_NAME);
-                                }
-                            }
-
-                            @Override
-                            public void onFailure(Exception e) {
-                                logger.error("Error creating or updating V2 template [{}]", TEMPLATE_NAME, e);
-                                OperationalMetricsCounter.getInstance().incrementCounter(OperationalMetric.LOCAL_INDEX_EXPORTER_EXCEPTIONS);
-                            }
-                        }
-                    );
-                } catch (Exception e) {
-                    logger.error("Failed to manage V2 template", e);
-                    OperationalMetricsCounter.getInstance().incrementCounter(OperationalMetric.LOCAL_INDEX_EXPORTER_EXCEPTIONS);
-                }
-
-                CreateIndexRequest createIndexRequest = new CreateIndexRequest(indexName);
-
-                createIndexRequest.settings(
-                    Settings.builder()
-                        .put("index.number_of_shards", DEFAULT_NUMBER_OF_SHARDS)
-                        .put("index.number_of_replicas", DEFAULT_NUMBER_OF_REPLICA)
-                );
-                createIndexRequest.mapping(readIndexMappings());
-
-                client.admin().indices().create(createIndexRequest, new ActionListener<>() {
-                    @Override
-                    public void onResponse(CreateIndexResponse createIndexResponse) {
-                        if (createIndexResponse.isAcknowledged()) {
-                            try {
-                                bulk(indexName, records);
-                            } catch (IOException e) {
-                                OperationalMetricsCounter.getInstance().incrementCounter(OperationalMetric.LOCAL_INDEX_EXPORTER_EXCEPTIONS);
-                                logger.error("Unable to index query insights data: ", e);
-                            }
-                        }
+                // First ensure the template exists, then create the index
+                ensureTemplateExists().whenComplete((templateCreated, templateException) -> {
+                    if (templateException != null) {
+                        logger.error("Error ensuring template exists:", templateException);
+                        OperationalMetricsCounter.getInstance().incrementCounter(OperationalMetric.LOCAL_INDEX_EXPORTER_EXCEPTIONS);
                     }
-
-                    @Override
-                    public void onFailure(Exception e) {
-                        Throwable cause = ExceptionsHelper.unwrapCause(e);
-                        if (cause instanceof ResourceAlreadyExistsException) {
-                            try {
-                                bulk(indexName, records);
-                            } catch (IOException ioe) {
-                                OperationalMetricsCounter.getInstance().incrementCounter(OperationalMetric.LOCAL_INDEX_EXPORTER_EXCEPTIONS);
-                                logger.error("Unable to index query insights data: ", ioe);
-                            }
-                        } else {
-                            OperationalMetricsCounter.getInstance().incrementCounter(OperationalMetric.LOCAL_INDEX_EXPORTER_EXCEPTIONS);
-                            logger.error("Unable to create query insights index: ", cause);
-                        }
+                    
+                    // Proceed with index creation even if there was a template error
+                    // The template might already exist or might be created by another node
+                    try {
+                        createIndex(indexName, records);
+                    } catch (IOException e) {
+                        logger.error("Error creating index:", e);
+                        OperationalMetricsCounter.getInstance().incrementCounter(OperationalMetric.LOCAL_INDEX_EXPORTER_EXCEPTIONS);
                     }
                 });
             } else {
+                // Index already exists, just send the data
                 bulk(indexName, records);
             }
-        } catch (IOException e) {
+        } catch (Exception e) {
             OperationalMetricsCounter.getInstance().incrementCounter(OperationalMetric.LOCAL_INDEX_EXPORTER_EXCEPTIONS);
-            logger.error("Unable to create query insights exporter: ", e);
+            logger.error("Unable to export query insights data: ", e);
         }
+    }
+
+    /**
+     * Creates an index with the specified name and exports records to it
+     * 
+     * @param indexName Name of the index to create
+     * @param records Records to export
+     * @throws IOException If there's an error reading mappings
+     */
+    private void createIndex(String indexName, List<SearchQueryRecord> records) throws IOException {
+        CreateIndexRequest createIndexRequest = new CreateIndexRequest(indexName);
+
+        createIndexRequest.settings(
+            Settings.builder()
+                .put("index.number_of_shards", DEFAULT_NUMBER_OF_SHARDS)
+                .put("index.number_of_replicas", DEFAULT_NUMBER_OF_REPLICA)
+        );
+        createIndexRequest.mapping(readIndexMappings());
+
+        client.admin().indices().create(createIndexRequest, new ActionListener<>() {
+            @Override
+            public void onResponse(CreateIndexResponse createIndexResponse) {
+                if (createIndexResponse.isAcknowledged()) {
+                    try {
+                        bulk(indexName, records);
+                    } catch (IOException e) {
+                        OperationalMetricsCounter.getInstance().incrementCounter(OperationalMetric.LOCAL_INDEX_EXPORTER_EXCEPTIONS);
+                        logger.error("Unable to index query insights data: ", e);
+                    }
+                }
+            }
+
+            @Override
+            public void onFailure(Exception e) {
+                Throwable cause = ExceptionsHelper.unwrapCause(e);
+                if (cause instanceof ResourceAlreadyExistsException) {
+                    try {
+                        bulk(indexName, records);
+                    } catch (IOException ioe) {
+                        OperationalMetricsCounter.getInstance().incrementCounter(OperationalMetric.LOCAL_INDEX_EXPORTER_EXCEPTIONS);
+                        logger.error("Unable to index query insights data: ", ioe);
+                    }
+                } else {
+                    OperationalMetricsCounter.getInstance().incrementCounter(OperationalMetric.LOCAL_INDEX_EXPORTER_EXCEPTIONS);
+                    logger.error("Unable to create query insights index: ", cause);
+                }
+            }
+        });
     }
 
     private void bulk(final String indexName, final List<SearchQueryRecord> records) throws IOException {
@@ -363,11 +336,53 @@ public class LocalIndexExporter implements QueryInsightsExporter {
     }
 
     /**
-     * Ensure a template exists for our index pattern with the configured priority
+     * Ensures that the template exists. This method first checks if the template exists and
+     * only creates it if it doesn't.
+     * 
+     * @return CompletableFuture that completes when the template check/creation is done
      */
-    private void ensureTemplateExists() {
+    private CompletableFuture<Boolean> ensureTemplateExists() {
+        CompletableFuture<Boolean> future = new CompletableFuture<>();
         String indexPattern = TOP_QUERIES_INDEX_PATTERN_GLOB;
 
+        // First check if the template already exists
+        GetComposableIndexTemplateAction.Request getRequest = new GetComposableIndexTemplateAction.Request(TEMPLATE_NAME);
+        
+        client.execute(
+            GetComposableIndexTemplateAction.INSTANCE,
+            getRequest,
+            new ActionListener<>() {
+                @Override
+                public void onResponse(GetComposableIndexTemplateAction.Response response) {
+                    // If the template exists, we don't need to create it
+                    if (response.indexTemplates().containsKey(TEMPLATE_NAME)) {
+                        logger.debug("Template [{}] already exists, skipping creation", TEMPLATE_NAME);
+                        future.complete(true);
+                        return;
+                    }
+                    
+                    // Template doesn't exist, create it
+                    createTemplate(future);
+                }
+
+                @Override
+                public void onFailure(Exception e) {
+                    // If we can't retrieve the template info, try creating it anyway
+                    logger.warn("Failed to check if template [{}] exists: {}", TEMPLATE_NAME, e.getMessage());
+                    createTemplate(future);
+                }
+            }
+        );
+        
+        return future;
+    }
+    
+    /**
+     * Helper method to create the template
+     * 
+     * @param future The CompletableFuture to complete when done
+     */
+    private void createTemplate(CompletableFuture<Boolean> future) {
         try {
             // Create a V2 template (ComposableIndexTemplate)
             CompressedXContent compressedMapping = new CompressedXContent(readIndexMappings());
@@ -385,7 +400,7 @@ public class LocalIndexExporter implements QueryInsightsExporter {
             // Create the composable template
             ComposableIndexTemplate composableTemplate =
                 new ComposableIndexTemplate(
-                    Collections.singletonList(indexPattern),
+                    Collections.singletonList(TOP_QUERIES_INDEX_PATTERN_GLOB),
                     template,
                     null, // No composed_of templates
                     templatePriority, // Priority using configured value
@@ -402,12 +417,14 @@ public class LocalIndexExporter implements QueryInsightsExporter {
                 request,
                 new ActionListener<>() {
                     @Override
-                    public void onResponse(org.opensearch.action.support.AcknowledgedResponse response) {
+                    public void onResponse(AcknowledgedResponse response) {
                         if (response.isAcknowledged()) {
                             logger.info("Successfully created or updated V2 template [{}] with priority {}",
                                 TEMPLATE_NAME, templatePriority);
+                            future.complete(true);
                         } else {
                             logger.warn("Failed to create or update V2 template [{}]", TEMPLATE_NAME);
+                            future.complete(false);
                         }
                     }
 
@@ -415,12 +432,14 @@ public class LocalIndexExporter implements QueryInsightsExporter {
                     public void onFailure(Exception e) {
                         logger.error("Error creating or updating V2 template [{}]", TEMPLATE_NAME, e);
                         OperationalMetricsCounter.getInstance().incrementCounter(OperationalMetric.LOCAL_INDEX_EXPORTER_EXCEPTIONS);
+                        future.completeExceptionally(e);
                     }
                 }
             );
         } catch (Exception e) {
             logger.error("Failed to manage V2 template", e);
             OperationalMetricsCounter.getInstance().incrementCounter(OperationalMetric.LOCAL_INDEX_EXPORTER_EXCEPTIONS);
+            future.completeExceptionally(e);
         }
     }
 
