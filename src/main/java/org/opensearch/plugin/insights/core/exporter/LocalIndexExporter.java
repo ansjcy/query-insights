@@ -145,42 +145,28 @@ public class LocalIndexExporter implements QueryInsightsExporter {
             final String indexName = buildLocalIndexName();
             if (!checkIndexExists(indexName)) {
                 // First ensure the template exists, then create the index
-                CompletableFuture<Boolean> templateFuture = ensureTemplateExists();
-                
-                // For unit tests that don't fully mock the async behavior,
-                // we need to handle the template creation synchronously
-                try {
-                    // Wait for the template creation to complete with a short timeout
-                    Boolean templateCreated = templateFuture.get(100, TimeUnit.MILLISECONDS);
-                    createIndex(indexName, records);
-                } catch (InterruptedException | ExecutionException | TimeoutException e) {
-                    // In a real environment, we would continue with the async approach
-                    // but for tests, this could lead to failures if template creation is mocked incorrectly
-                    logger.info("Using async template creation approach due to: {}", e.getMessage());
+                ensureTemplateExists().whenComplete((templateCreated, templateException) -> {
+                    if (templateException != null) {
+                        logger.error("Error ensuring template exists:", templateException);
+                        OperationalMetricsCounter.getInstance().incrementCounter(OperationalMetric.LOCAL_INDEX_EXPORTER_EXCEPTIONS);
+                    }
                     
-                    templateFuture.whenComplete((templateCreated, templateException) -> {
-                        if (templateException != null) {
-                            logger.error("Error ensuring template exists:", templateException);
-                            OperationalMetricsCounter.getInstance().incrementCounter(OperationalMetric.LOCAL_INDEX_EXPORTER_EXCEPTIONS);
-                        }
-                        
-                        // Proceed with index creation even if there was a template error
-                        // The template might already exist or might be created by another node
-                        try {
-                            createIndex(indexName, records);
-                        } catch (IOException ioe) {
-                            logger.error("Error creating index:", ioe);
-                            OperationalMetricsCounter.getInstance().incrementCounter(OperationalMetric.LOCAL_INDEX_EXPORTER_EXCEPTIONS);
-                        }
-                    });
-                }
+                    // Proceed with index creation even if there was a template error
+                    // The template might already exist or might be created by another node
+                    try {
+                        createIndex(indexName, records);
+                    } catch (IOException ioe) {
+                        logger.error("Error creating index:", ioe);
+                        OperationalMetricsCounter.getInstance().incrementCounter(OperationalMetric.LOCAL_INDEX_EXPORTER_EXCEPTIONS);
+                    }
+                });
             } else {
-                // Index already exists, just send the data
+                // Index already exists, proceed with bulk export
                 bulk(indexName, records);
             }
-        } catch (Exception e) {
+        } catch (IOException e) {
+            logger.error("Unable to export query insights data:", e);
             OperationalMetricsCounter.getInstance().incrementCounter(OperationalMetric.LOCAL_INDEX_EXPORTER_EXCEPTIONS);
-            logger.error("Unable to export query insights data: ", e);
         }
     }
 
