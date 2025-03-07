@@ -177,7 +177,7 @@ public class LocalIndexExporter implements QueryInsightsExporter {
      * @param records Records to export
      * @throws IOException If there's an error reading mappings
      */
-    private void createIndex(String indexName, List<SearchQueryRecord> records) throws IOException {
+    void createIndex(String indexName, List<SearchQueryRecord> records) throws IOException {
         CreateIndexRequest createIndexRequest = new CreateIndexRequest(indexName);
 
         createIndexRequest.settings(
@@ -218,7 +218,7 @@ public class LocalIndexExporter implements QueryInsightsExporter {
         });
     }
 
-    private void bulk(final String indexName, final List<SearchQueryRecord> records) throws IOException {
+    void bulk(final String indexName, final List<SearchQueryRecord> records) throws IOException {
         final BulkRequestBuilder bulkRequestBuilder = client.prepareBulk().setTimeout(TimeValue.timeValueMinutes(1));
         for (SearchQueryRecord record : records) {
             bulkRequestBuilder.add(
@@ -379,7 +379,7 @@ public class LocalIndexExporter implements QueryInsightsExporter {
      *
      * @param future The CompletableFuture to complete when done
      */
-    private void createTemplate(CompletableFuture<Boolean> future) {
+    void createTemplate(CompletableFuture<Boolean> future) {
         try {
             // Create a V2 template (ComposableIndexTemplate)
             CompressedXContent compressedMapping = new CompressedXContent(readIndexMappings());

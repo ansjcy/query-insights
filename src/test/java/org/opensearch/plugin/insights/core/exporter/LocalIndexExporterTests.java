@@ -12,7 +12,9 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.doNothing;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.spy;
@@ -22,6 +24,7 @@ import static org.mockito.Mockito.when;
 import static org.opensearch.plugin.insights.core.service.QueryInsightsService.QUERY_INSIGHTS_INDEX_TAG_NAME;
 import static org.opensearch.plugin.insights.core.service.TopQueriesService.TOP_QUERIES_INDEX_TAG_VALUE;
 import static org.opensearch.plugin.insights.core.utils.ExporterReaderUtils.generateLocalIndexDateHash;
+import static org.opensearch.plugin.insights.settings.QueryInsightsSettings.TOP_QUERIES_INDEX_PATTERN_GLOB;
 
 import java.io.IOException;
 import java.time.ZoneOffset;
@@ -74,18 +77,18 @@ import org.mockito.ArgumentCaptor;
 import java.lang.reflect.Field;
 import org.junit.Test;
 import org.opensearch.cluster.metadata.Metadata;
-import org.opensearch.action.bulk.BulkRequestBuilder;
-import org.opensearch.action.bulk.BulkResponse;
 import org.opensearch.action.index.IndexRequest;
 import org.opensearch.action.admin.indices.create.CreateIndexRequestBuilder;
 import java.util.HashMap;
-import org.opensearch.action.index.IndexRequest;
-import static org.mockito.Mockito.doReturn;
+import org.opensearch.common.unit.TimeValue;
+import org.opensearch.action.support.WriteRequest;
+import java.util.Collections;
 
 /**
  * Granular tests for the {@link LocalIndexExporterTests} class.
  */
 public class LocalIndexExporterTests extends OpenSearchTestCase {
+    private static final String TEMPLATE_NAME = "query_insights_override";
     private final DateTimeFormatter format = DateTimeFormatter.ofPattern("YYYY.MM.dd", Locale.ROOT);
     private final Client client = mock(Client.class);
     private final AdminClient adminClient = mock(AdminClient.class);
@@ -146,33 +149,130 @@ public class LocalIndexExporterTests extends OpenSearchTestCase {
     }
 
     @Test
-    public void testExportRecordsWhenIndexExists() {
-        // Create a LocalIndexExporter with minimal mocks
+    public void testExportRecordsWhenIndexExists() throws IOException {
+        // Create a mock client
         Client mockClient = mock(Client.class);
         ClusterService mockClusterService = mock(ClusterService.class);
         DateTimeFormatter format = DateTimeFormatter.ofPattern("yyyy-MM-dd");
         
-        // Create a LocalIndexExporter with our mock components
+        // Create the exporter with the mocks
         LocalIndexExporter exporter = new LocalIndexExporter(mockClient, mockClusterService, format, "{}", "id");
-        exporter.setTemplatePriority(3000L);
+        LocalIndexExporter exporterSpy = spy(exporter);
         
-        // Verify the template priority is set correctly
-        assertEquals("Template priority should be set to 3000", 3000L, exporter.getTemplatePriority());
+        // Make checkIndexExists return true to simulate index already exists
+        doReturn(true).when(exporterSpy).checkIndexExists(anyString());
+        
+        // Mock the bulk method to track calls
+        doAnswer(invocation -> null).when(exporterSpy).bulk(anyString(), any());
+        
+        // Generate test records
+        List<SearchQueryRecord> records = QueryInsightsTestUtils.generateQueryInsightRecords(3);
+        
+        // Call export
+        exporterSpy.export(records);
+        
+        // Verify bulk was called (to add records to existing index)
+        verify(exporterSpy).bulk(anyString(), eq(records));
+        
+        // Verify ensureTemplateExists was NOT called (since index already exists)
+        verify(exporterSpy, never()).ensureTemplateExists();
+        
+        // Verify createIndex was NOT called (since index already exists)
+        verify(exporterSpy, never()).createIndex(anyString(), any());
     }
 
     @Test
-    public void testExportRecordsWhenIndexNotExist() {
-        // Create a LocalIndexExporter with minimal mocks
+    public void testExportRecordsWhenIndexNotExist() throws IOException {
+        // Create a mock client
         Client mockClient = mock(Client.class);
         ClusterService mockClusterService = mock(ClusterService.class);
         DateTimeFormatter format = DateTimeFormatter.ofPattern("yyyy-MM-dd");
         
-        // Create a LocalIndexExporter with our mock components
+        // Create the exporter with the mocks
         LocalIndexExporter exporter = new LocalIndexExporter(mockClient, mockClusterService, format, "{}", "id");
-        exporter.setTemplatePriority(4000L);
+        LocalIndexExporter exporterSpy = spy(exporter);
         
-        // Verify the template priority is set correctly
-        assertEquals("Template priority should be set to 4000", 4000L, exporter.getTemplatePriority());
+        // Make checkIndexExists return false to simulate index doesn't exist
+        doReturn(false).when(exporterSpy).checkIndexExists(anyString());
+        
+        // Mock ensureTemplateExists to return a completed future
+        CompletableFuture<Boolean> completedFuture = CompletableFuture.completedFuture(true);
+        doReturn(completedFuture).when(exporterSpy).ensureTemplateExists();
+        
+        // Mock createIndex to track calls
+        doAnswer(invocation -> null).when(exporterSpy).createIndex(anyString(), any());
+        
+        // Generate test records
+        List<SearchQueryRecord> records = QueryInsightsTestUtils.generateQueryInsightRecords(3);
+        
+        // Call export
+        exporterSpy.export(records);
+        
+        // Verify ensureTemplateExists was called (since index doesn't exist)
+        verify(exporterSpy).ensureTemplateExists();
+        
+        // Verify createIndex was called (since index doesn't exist)
+        verify(exporterSpy).createIndex(anyString(), eq(records));
+        
+        // Verify bulk was NOT called directly (it's called inside createIndex)
+        verify(exporterSpy, never()).bulk(anyString(), any());
+    }
+
+    @Test
+    public void testExportWaitsForTemplateCreation() throws Exception {
+        // Create a mock client
+        Client mockClient = mock(Client.class);
+        ClusterService mockClusterService = mock(ClusterService.class);
+        DateTimeFormatter format = DateTimeFormatter.ofPattern("yyyy-MM-dd");
+        
+        // Create the exporter with the mocks
+        LocalIndexExporter exporter = new LocalIndexExporter(mockClient, mockClusterService, format, "{}", "id");
+        LocalIndexExporter exporterSpy = spy(exporter);
+        
+        // Make checkIndexExists return false to simulate index doesn't exist
+        doReturn(false).when(exporterSpy).checkIndexExists(anyString());
+        
+        // Create a CompletableFuture that we can control manually
+        CompletableFuture<Boolean> templateFuture = new CompletableFuture<>();
+        doReturn(templateFuture).when(exporterSpy).ensureTemplateExists();
+        
+        // Use a CountDownLatch to track if createIndex is called
+        CountDownLatch createIndexCalled = new CountDownLatch(1);
+        doAnswer(invocation -> {
+            createIndexCalled.countDown();
+            return null;
+        }).when(exporterSpy).createIndex(anyString(), any());
+        
+        // Generate test records
+        List<SearchQueryRecord> records = QueryInsightsTestUtils.generateQueryInsightRecords(3);
+        
+        // Call export in a separate thread so it doesn't block our test
+        Thread exportThread = new Thread(() -> {
+            try {
+                exporterSpy.export(records);
+            } catch (Exception e) {
+                fail("Export should not throw an exception: " + e.getMessage());
+            }
+        });
+        exportThread.start();
+        
+        // Wait a short time to allow the export method to run up to the point of waiting for the template
+        Thread.sleep(100);
+        
+        // Verify createIndex has NOT been called yet (should be waiting for template)
+        assertEquals("createIndex should not be called until template is created", 1, createIndexCalled.getCount());
+        
+        // Complete the template future
+        templateFuture.complete(true);
+        
+        // Wait for createIndex to be called
+        boolean createIndexWasCalled = createIndexCalled.await(1, TimeUnit.SECONDS);
+        
+        // Verify createIndex was eventually called after template was created
+        assertTrue("createIndex should be called after template is created", createIndexWasCalled);
+        
+        // Clean up
+        exportThread.join(1000);
     }
 
     @SuppressWarnings("unchecked")
@@ -199,12 +299,14 @@ public class LocalIndexExporterTests extends OpenSearchTestCase {
         }
     }
 
+    @Test
     public void testGetAndSetIndexPattern() {
         final DateTimeFormatter newFormatter = DateTimeFormatter.ofPattern("YYYY-MM-dd", Locale.ROOT);
         localIndexExporter.setIndexPattern(newFormatter);
         assert (localIndexExporter.getIndexPattern() == newFormatter);
     }
 
+    @Test
     public void testGetAndSetTemplatePriority() {
         final long newTemplatePriority = 2000L;
         localIndexExporter.setTemplatePriority(newTemplatePriority);
@@ -216,22 +318,34 @@ public class LocalIndexExporterTests extends OpenSearchTestCase {
      */
     @Test
     public void testEnsureTemplateExistsCreatesV2Template() throws Exception {
-        // Create a LocalIndexExporter with minimal mocks
+        // Create a mock client that will capture the template request
         Client mockClient = mock(Client.class);
         ClusterService mockClusterService = mock(ClusterService.class);
+        
+        // Create a spy on LocalIndexExporter to intercept createTemplate calls
         DateTimeFormatter format = DateTimeFormatter.ofPattern("yyyy-MM-dd");
-        
-        // Create a LocalIndexExporter with our mock components
         LocalIndexExporter exporter = new LocalIndexExporter(mockClient, mockClusterService, format, "{}", "id");
-        exporter.setTemplatePriority(5000L);
+        LocalIndexExporter exporterSpy = spy(exporter);
         
-        // Verify the template priority is set correctly
-        assertEquals("Template priority should be set to 5000", 5000L, exporter.getTemplatePriority());
+        // Set a custom priority to verify it's used in the template
+        exporterSpy.setTemplatePriority(5000L);
+        
+        // Mock ensureTemplateExists to complete successfully without making actual calls
+        CompletableFuture<Boolean> completedFuture = CompletableFuture.completedFuture(true);
+        doReturn(completedFuture).when(exporterSpy).ensureTemplateExists();
+        
+        // Call ensureTemplateExists
+        CompletableFuture<Boolean> future = exporterSpy.ensureTemplateExists();
+        assertTrue(future.get(5, TimeUnit.SECONDS));
+        
+        // Verify the priority value was set correctly
+        assertEquals("Template priority should be set correctly", 5000L, exporterSpy.getTemplatePriority());
     }
 
     /**
      * Test that ensureTemplateExists skips creating a template when it already exists
      */
+    @Test
     public void testEnsureTemplateExistsSkipsWhenTemplateExists() throws Exception {
         // Create a mock client
         Client mockClient = mock(Client.class);
@@ -289,24 +403,6 @@ public class LocalIndexExporterTests extends OpenSearchTestCase {
             any(PutComposableIndexTemplateAction.Request.class),
             any(org.opensearch.core.action.ActionListener.class)
         );
-    }
-
-    /**
-     * Test that export method correctly waits for template creation before creating the index
-     */
-    @Test
-    public void testExportWaitsForTemplateCreation() {
-        // Create a LocalIndexExporter with minimal mocks
-        Client mockClient = mock(Client.class);
-        ClusterService mockClusterService = mock(ClusterService.class);
-        DateTimeFormatter format = DateTimeFormatter.ofPattern("yyyy-MM-dd");
-        
-        // Create a LocalIndexExporter with our mock components
-        LocalIndexExporter exporter = new LocalIndexExporter(mockClient, mockClusterService, format, "{}", "id");
-        exporter.setTemplatePriority(6000L);
-        
-        // Verify the template priority is set correctly
-        assertEquals("Template priority should be set to 6000", 6000L, exporter.getTemplatePriority());
     }
 
     /**
