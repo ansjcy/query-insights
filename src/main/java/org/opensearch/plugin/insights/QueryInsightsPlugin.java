@@ -92,7 +92,7 @@ public class QueryInsightsPlugin extends Plugin implements ActionPlugin, Telemet
             new QueryInsightsExporterFactory(client, clusterService),
             new QueryInsightsReaderFactory(client)
         );
-        return List.of(queryInsightsService, new QueryInsightsListener(clusterService, queryInsightsService, false));
+        return List.of(queryInsightsService, new QueryInsightsListener(clusterService, queryInsightsService, client));
     }
 
     @Override
@@ -131,25 +131,50 @@ public class QueryInsightsPlugin extends Plugin implements ActionPlugin, Telemet
     @Override
     public List<Setting<?>> getSettings() {
         return List.of(
-            // Settings for top N queries
+            // Threadpool settings
+            Setting.intSetting(
+                "thread_pool." + QueryInsightsSettings.QUERY_INSIGHTS_EXECUTOR + ".size",
+                4,
+                1,
+                QueryInsightsSettings.MAX_THREAD_COUNT,
+                Setting.Property.NodeScope
+            ),
+            Setting.intSetting(
+                "thread_pool." + QueryInsightsSettings.QUERY_INSIGHTS_EXECUTOR + ".queue_size",
+                100,
+                1,
+                1000,
+                Setting.Property.NodeScope
+            ),
+            // Top N Queries by Latency
             QueryInsightsSettings.TOP_N_LATENCY_QUERIES_ENABLED,
             QueryInsightsSettings.TOP_N_LATENCY_QUERIES_SIZE,
             QueryInsightsSettings.TOP_N_LATENCY_QUERIES_WINDOW_SIZE,
+            // Top N Queries by CPU
             QueryInsightsSettings.TOP_N_CPU_QUERIES_ENABLED,
             QueryInsightsSettings.TOP_N_CPU_QUERIES_SIZE,
             QueryInsightsSettings.TOP_N_CPU_QUERIES_WINDOW_SIZE,
+            // Top N Queries by Memory
             QueryInsightsSettings.TOP_N_MEMORY_QUERIES_ENABLED,
             QueryInsightsSettings.TOP_N_MEMORY_QUERIES_SIZE,
             QueryInsightsSettings.TOP_N_MEMORY_QUERIES_WINDOW_SIZE,
+            // Top Queries Export Settings
+            QueryInsightsSettings.TOP_N_EXPORTER_TYPE,
+            QueryInsightsSettings.TOP_N_EXPORTER_DELETE_AFTER,
+            QueryInsightsSettings.TOP_N_EXPORTER_TEMPLATE_PRIORITY,
+            // Top Query Grouping Settings
             QueryInsightsSettings.TOP_N_QUERIES_GROUP_BY,
             QueryInsightsSettings.TOP_N_QUERIES_MAX_GROUPS_EXCLUDING_N,
             QueryInsightsSettings.TOP_N_QUERIES_GROUPING_FIELD_NAME,
             QueryInsightsSettings.TOP_N_QUERIES_GROUPING_FIELD_TYPE,
+            // Search Query Categorization Settings
             QueryCategorizationSettings.SEARCH_QUERY_METRICS_ENABLED_SETTING,
-            QueryInsightsSettings.TOP_N_EXPORTER_DELETE_AFTER,
-            QueryInsightsSettings.TOP_N_EXPORTER_TYPE,
-            QueryInsightsSettings.TOP_N_EXPORTER_TEMPLATE_PRIORITY,
-            QueryCategorizationSettings.SEARCH_QUERY_FIELD_TYPE_CACHE_SIZE_KEY
+            // Feature Embedding Settings
+            QueryInsightsSettings.FEATURE_EMBEDDING_ENABLED,
+            QueryInsightsSettings.FEATURE_EMBEDDING_OUTPUT_DIRECTORY,
+            QueryInsightsSettings.FEATURE_EMBEDDING_FILE_PREFIX,
+            QueryInsightsSettings.FEATURE_EMBEDDING_EXPORT_INTERVAL,
+            QueryInsightsSettings.FEATURE_EMBEDDING_FEATURES_TO_INCLUDE
         );
     }
 }

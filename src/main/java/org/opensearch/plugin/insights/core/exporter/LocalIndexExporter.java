@@ -68,8 +68,8 @@ public class LocalIndexExporter implements QueryInsightsExporter {
     private DateTimeFormatter indexPattern;
     private int deleteAfter;
     private final String id;
-    private static final int DEFAULT_NUMBER_OF_REPLICA = 1;
     private static final int DEFAULT_NUMBER_OF_SHARDS = 1;
+    private static final String DEFAULT_AUTO_EXPAND_REPLICAS = "0-2";
     private static final String TEMPLATE_NAME = "query_insights_override";
     private long templatePriority;
 
@@ -183,7 +183,7 @@ public class LocalIndexExporter implements QueryInsightsExporter {
         createIndexRequest.settings(
             Settings.builder()
                 .put("index.number_of_shards", DEFAULT_NUMBER_OF_SHARDS)
-                .put("index.number_of_replicas", DEFAULT_NUMBER_OF_REPLICA)
+                .put("index.auto_expand_replicas", DEFAULT_AUTO_EXPAND_REPLICAS)
         );
         createIndexRequest.mapping(readIndexMappings());
 
@@ -388,7 +388,7 @@ public class LocalIndexExporter implements QueryInsightsExporter {
             org.opensearch.cluster.metadata.Template template = new org.opensearch.cluster.metadata.Template(
                 Settings.builder()
                     .put("index.number_of_shards", DEFAULT_NUMBER_OF_SHARDS)
-                    .put("index.number_of_replicas", DEFAULT_NUMBER_OF_REPLICA)
+                    .put("index.auto_expand_replicas", DEFAULT_AUTO_EXPAND_REPLICAS)
                     .build(),
                 compressedMapping,
                 null

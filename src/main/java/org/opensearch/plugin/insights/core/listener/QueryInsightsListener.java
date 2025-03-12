@@ -13,6 +13,11 @@ import static org.opensearch.plugin.insights.settings.QueryInsightsSettings.TOP_
 import static org.opensearch.plugin.insights.settings.QueryInsightsSettings.TOP_N_QUERIES_GROUPING_FIELD_TYPE;
 import static org.opensearch.plugin.insights.settings.QueryInsightsSettings.TOP_N_QUERIES_GROUP_BY;
 import static org.opensearch.plugin.insights.settings.QueryInsightsSettings.TOP_N_QUERIES_MAX_GROUPS_EXCLUDING_N;
+import static org.opensearch.plugin.insights.settings.QueryInsightsSettings.FEATURE_EMBEDDING_ENABLED;
+import static org.opensearch.plugin.insights.settings.QueryInsightsSettings.FEATURE_EMBEDDING_EXPORT_INTERVAL;
+import static org.opensearch.plugin.insights.settings.QueryInsightsSettings.FEATURE_EMBEDDING_FILE_PREFIX;
+import static org.opensearch.plugin.insights.settings.QueryInsightsSettings.FEATURE_EMBEDDING_OUTPUT_DIRECTORY;
+import static org.opensearch.plugin.insights.settings.QueryInsightsSettings.FEATURE_EMBEDDING_FEATURES_TO_INCLUDE;
 import static org.opensearch.plugin.insights.settings.QueryInsightsSettings.getTopNEnabledSetting;
 import static org.opensearch.plugin.insights.settings.QueryInsightsSettings.getTopNSizeSetting;
 import static org.opensearch.plugin.insights.settings.QueryInsightsSettings.getTopNWindowSizeSetting;
@@ -36,12 +41,15 @@ import org.opensearch.plugin.insights.core.metrics.OperationalMetric;
 import org.opensearch.plugin.insights.core.metrics.OperationalMetricsCounter;
 import org.opensearch.plugin.insights.core.service.QueryInsightsService;
 import org.opensearch.plugin.insights.core.service.categorizer.QueryShapeGenerator;
+import org.opensearch.plugin.insights.core.utils.FeatureEmbeddingGenerator;
 import org.opensearch.plugin.insights.rules.model.Attribute;
 import org.opensearch.plugin.insights.rules.model.Measurement;
 import org.opensearch.plugin.insights.rules.model.MetricType;
 import org.opensearch.plugin.insights.rules.model.SearchQueryRecord;
 import org.opensearch.plugin.insights.settings.QueryInsightsSettings;
 import org.opensearch.tasks.Task;
+import org.opensearch.client.Client;
+import org.opensearch.common.settings.Settings;
 
 /**
  * The listener for query insights services.
@@ -57,6 +65,9 @@ public final class QueryInsightsListener extends SearchRequestOperationsListener
     private boolean groupingFieldNameEnabled;
     private boolean groupingFieldTypeEnabled;
     private final QueryShapeGenerator queryShapeGenerator;
+    private final FeatureEmbeddingGenerator featureEmbeddingGenerator;
+    private final Client client;
+    private final Settings settings;
 
     /**
      * Constructor for QueryInsightsListener
@@ -65,8 +76,8 @@ public final class QueryInsightsListener extends SearchRequestOperationsListener
      * @param queryInsightsService The topQueriesByLatencyService associated with this listener
      */
     @Inject
-    public QueryInsightsListener(final ClusterService clusterService, final QueryInsightsService queryInsightsService) {
-        this(clusterService, queryInsightsService, false);
+    public QueryInsightsListener(final ClusterService clusterService, final QueryInsightsService queryInsightsService, final Client client) {
+        this(clusterService, queryInsightsService, client, false);
         groupingFieldNameEnabled = false;
         groupingFieldTypeEnabled = false;
     }
@@ -81,13 +92,17 @@ public final class QueryInsightsListener extends SearchRequestOperationsListener
     public QueryInsightsListener(
         final ClusterService clusterService,
         final QueryInsightsService queryInsightsService,
+        final Client client,
         boolean initiallyEnabled
     ) {
         super(initiallyEnabled);
         this.clusterService = clusterService;
         this.queryInsightsService = queryInsightsService;
+        this.client = client;
+        this.settings = clusterService.getSettings();
         this.queryShapeGenerator = new QueryShapeGenerator(clusterService);
         queryInsightsService.setQueryShapeGenerator(queryShapeGenerator);
+        this.featureEmbeddingGenerator = new FeatureEmbeddingGenerator(settings, clusterService, client, queryShapeGenerator);
 
         // Setting endpoints set up for top n queries, including enabling top n queries, window size, and top n size
         // Expected metricTypes are Latency, CPU, and Memory.
@@ -144,6 +159,11 @@ public final class QueryInsightsListener extends SearchRequestOperationsListener
         clusterService.getClusterSettings()
             .addSettingsUpdateConsumer(SEARCH_QUERY_METRICS_ENABLED_SETTING, this::setSearchQueryMetricsEnabled);
         setSearchQueryMetricsEnabled(clusterService.getClusterSettings().get(SEARCH_QUERY_METRICS_ENABLED_SETTING));
+        
+        // Feature embedding settings
+        clusterService.getClusterSettings()
+            .addSettingsUpdateConsumer(FEATURE_EMBEDDING_ENABLED, this::setFeatureEmbeddingEnabled);
+        setFeatureEmbeddingEnabled(clusterService.getClusterSettings().get(FEATURE_EMBEDDING_ENABLED));
     }
 
     /**
@@ -167,6 +187,16 @@ public final class QueryInsightsListener extends SearchRequestOperationsListener
         this.queryInsightsService.enableSearchQueryMetricsFeature(searchQueryMetricsEnabled);
         updateQueryInsightsState();
     }
+    
+    /**
+     * Set feature embedding generation enabled to control the generation of feature embeddings.
+     * @param featureEmbeddingEnabled boolean flag
+     */
+    public void setFeatureEmbeddingEnabled(boolean featureEmbeddingEnabled) {
+        // Will be handled by the FeatureEmbeddingGenerator when it's initialized
+        // Using a new instance would ensure it picks up the latest settings
+        updateQueryInsightsState();
+    }
 
     public void setGroupingFieldNameEnabled(Boolean fieldNameEnabled) {
         this.groupingFieldNameEnabled = fieldNameEnabled;
@@ -181,7 +211,7 @@ public final class QueryInsightsListener extends SearchRequestOperationsListener
      * If any feature is enabled, it starts the service. If no features are enabled, it stops the service.
      */
     private void updateQueryInsightsState() {
-        boolean anyFeatureEnabled = queryInsightsService.isAnyFeatureEnabled();
+        boolean anyFeatureEnabled = queryInsightsService.isAnyFeatureEnabled() || featureEmbeddingGenerator.isEnabled();
 
         if (anyFeatureEnabled && !super.isEnabled()) {
             super.setEnabled(true);
@@ -210,13 +240,44 @@ public final class QueryInsightsListener extends SearchRequestOperationsListener
     @Override
     public void onRequestStart(SearchRequestContext searchRequestContext) {}
 
+    // Generate feature vectors for search queries when the request starts
+    // Store them in a thread-local map to be accessed when the request ends
+    private final ThreadLocal<Map<Long, Map<String, Object>>> requestFeatureVectors = new ThreadLocal<Map<Long, Map<String, Object>>>() {
+        @Override
+        protected Map<Long, Map<String, Object>> initialValue() {
+            return new HashMap<>();
+        }
+    };
+    
     @Override
     public void onRequestEnd(final SearchPhaseContext context, final SearchRequestContext searchRequestContext) {
+        // Generate the feature vector if enabled
+        if (featureEmbeddingGenerator.isEnabled()) {
+            Map<String, Object> featureVector = featureEmbeddingGenerator.generateFeatureVector(context, searchRequestContext);
+            
+            if (!featureVector.isEmpty()) {
+                // Store the feature vector for the current request
+                long taskId = context.getTask().getId();
+                requestFeatureVectors.get().put(taskId, featureVector);
+            }
+        }
+        
         constructSearchQueryRecord(context, searchRequestContext);
     }
 
     @Override
     public void onRequestFailure(final SearchPhaseContext context, final SearchRequestContext searchRequestContext) {
+        // Generate the feature vector if enabled
+        if (featureEmbeddingGenerator.isEnabled()) {
+            Map<String, Object> featureVector = featureEmbeddingGenerator.generateFeatureVector(context, searchRequestContext);
+            
+            if (!featureVector.isEmpty()) {
+                // Store the feature vector for the current request
+                long taskId = context.getTask().getId();
+                requestFeatureVectors.get().put(taskId, featureVector);
+            }
+        }
+        
         constructSearchQueryRecord(context, searchRequestContext);
     }
 
@@ -294,10 +355,23 @@ public final class QueryInsightsListener extends SearchRequestOperationsListener
             // construct SearchQueryRecord from attributes and measurements
             SearchQueryRecord record = new SearchQueryRecord(request.getOrCreateAbsoluteStartMillis(), measurements, attributes);
             queryInsightsService.addRecord(record);
+            
+            // Process feature vector if available
+            if (featureEmbeddingGenerator.isEnabled()) {
+                // Retrieve the feature vector for this request if it exists
+                Map<String, Object> featureVector = requestFeatureVectors.get().remove(searchTask.getId());
+                
+                if (featureVector != null && !featureVector.isEmpty()) {
+                    // Update performance metrics in the feature vector
+                    featureEmbeddingGenerator.updatePerformanceMetrics(featureVector, record);
+                    
+                    // Export the feature vector
+                    featureEmbeddingGenerator.exportFeatureVector(featureVector);
+                }
+            }
         } catch (Exception e) {
             OperationalMetricsCounter.getInstance().incrementCounter(OperationalMetric.DATA_INGEST_EXCEPTIONS);
             log.error(String.format(Locale.ROOT, "fail to ingest query insight data, error: %s", e));
         }
     }
-
 }

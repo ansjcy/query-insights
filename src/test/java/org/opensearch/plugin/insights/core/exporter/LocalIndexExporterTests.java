@@ -454,4 +454,40 @@ public class LocalIndexExporterTests extends OpenSearchTestCase {
         // Verify that readIndexMappings returns an empty JSON object
         assertEquals("{}", exporter.readIndexMappings());
     }
+    
+    /**
+     * Test that createIndex correctly sets auto_expand_replicas
+     */
+    @Test
+    public void testCreateIndexWithAutoExpandReplicas() throws IOException {
+        // Create a LocalIndexExporter that extends the real one for testing
+        LocalIndexExporter exporterSpy = spy(new LocalIndexExporter(client, clusterService, format, "{}", "id"));
+        
+        // Capture the CreateIndexRequest
+        ArgumentCaptor<CreateIndexRequest> requestCaptor = ArgumentCaptor.forClass(CreateIndexRequest.class);
+        
+        // Mock the client.admin().indices().create() call
+        AdminClient adminClient = mock(AdminClient.class);
+        IndicesAdminClient indicesClient = mock(IndicesAdminClient.class);
+        when(client.admin()).thenReturn(adminClient);
+        when(adminClient.indices()).thenReturn(indicesClient);
+        
+        // Use doNothing() to avoid actually making the create call
+        doNothing().when(indicesClient).create(requestCaptor.capture(), any(ActionListener.class));
+        
+        // Call createIndex (the real method)
+        exporterSpy.createIndex("test-index", Collections.emptyList());
+        
+        // Verify the captured request
+        CreateIndexRequest capturedRequest = requestCaptor.getValue();
+        Settings settings = capturedRequest.settings();
+        
+        // Verify the settings use auto_expand_replicas
+        assertEquals("test-index", capturedRequest.index());
+        assertEquals("0-2", settings.get("index.auto_expand_replicas"));
+        assertEquals("1", settings.get("index.number_of_shards"));
+        
+        // Verify the old number_of_replicas setting is not present
+        assertNull(settings.get("index.number_of_replicas"));
+    }
 }

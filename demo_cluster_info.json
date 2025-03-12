@@ -1,0 +1,44 @@
+{
+  "active_nodes_count": 3,
+  "cluster_status": "green",
+  "indices_status": 2,
+  "avg_cpu_utilization": 45,
+  "avg_jvm_heap_used_percent": 62,
+  "avg_disk_used_percent": 58,
+  "avg_docs_count": 5000000,
+  "max_docs_count": 8000000,
+  "avg_index_size_bytes": 2000000000,
+  "total_shards": 15,
+  "indices": [
+    {
+      "name": "logs-2023",
+      "doc_count": 3500000,
+      "size_bytes": 1200000000,
+      "shard_count": 5
+    },
+    {
+      "name": "products",
+      "doc_count": 800000,
+      "size_bytes": 450000000,
+      "shard_count": 3
+    },
+    {
+      "name": "users",
+      "doc_count": 700000,
+      "size_bytes": 350000000,
+      "shard_count": 3
+    }
+  ],
+  "cluster_settings": {
+    "search_threadpool_size": 20,
+    "search_threadpool_queue_size": 1000,
+    "write_threadpool_size": 10,
+    "max_result_window": 10000
+  },
+  "hardware_specs": {
+    "cpu_cores_per_node": 8,
+    "memory_gb_per_node": 32,
+    "disk_gb_per_node": 500,
+    "network_bandwidth_mbps": 10000
+  }
+} 

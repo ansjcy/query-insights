@@ -90,6 +90,63 @@ public class QueryInsightsSettings {
     public static final String TOP_N_CPU_QUERIES_PREFIX = TOP_N_QUERIES_SETTING_PREFIX + ".cpu";
     /** Default prefix for top N queries by memory feature */
     public static final String TOP_N_MEMORY_QUERIES_PREFIX = TOP_N_QUERIES_SETTING_PREFIX + ".memory";
+
+    /**
+     * Feature Embedding settings prefix
+     */
+    public static final String FEATURE_EMBEDDING_PREFIX = "search.insights.feature_embedding";
+
+    /**
+     * Boolean setting for enabling feature embedding generation
+     */
+    public static final Setting<Boolean> FEATURE_EMBEDDING_ENABLED = Setting.boolSetting(
+        FEATURE_EMBEDDING_PREFIX + ".enabled",
+        false,
+        Setting.Property.Dynamic,
+        Setting.Property.NodeScope
+    );
+
+    /**
+     * Setting for feature embedding output directory
+     */
+    public static final Setting<String> FEATURE_EMBEDDING_OUTPUT_DIRECTORY = Setting.simpleString(
+        FEATURE_EMBEDDING_PREFIX + ".output_directory",
+        System.getProperty("java.io.tmpdir"),
+        Setting.Property.Dynamic,
+        Setting.Property.NodeScope
+    );
+
+    /**
+     * Setting for feature embedding file prefix
+     */
+    public static final Setting<String> FEATURE_EMBEDDING_FILE_PREFIX = Setting.simpleString(
+        FEATURE_EMBEDDING_PREFIX + ".file_prefix",
+        "query_features",
+        Setting.Property.Dynamic,
+        Setting.Property.NodeScope
+    );
+
+    /**
+     * Setting for feature embedding export interval
+     */
+    public static final Setting<TimeValue> FEATURE_EMBEDDING_EXPORT_INTERVAL = Setting.timeSetting(
+        FEATURE_EMBEDDING_PREFIX + ".export_interval",
+        TimeValue.timeValueMinutes(5),
+        TimeValue.timeValueSeconds(1),
+        Setting.Property.Dynamic,
+        Setting.Property.NodeScope
+    );
+
+    /**
+     * Setting for features to include in the embedding
+     */
+    public static final Setting<String> FEATURE_EMBEDDING_FEATURES_TO_INCLUDE = Setting.simpleString(
+        FEATURE_EMBEDDING_PREFIX + ".features_to_include",
+        "all",
+        Setting.Property.Dynamic,
+        Setting.Property.NodeScope
+    );
+
     /**
      * Boolean setting for enabling top queries by latency.
      */
