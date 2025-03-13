@@ -210,21 +210,11 @@ def create_sagemaker_training_job(train_data_s3_uri, job_name=None):
     # Define output path for the model artifacts
     output_path = f"s3://{BUCKET_NAME}/{PREFIX}/models/{job_name}/output"
     
-    # Define hyperparameters for XGBoost model
-    hyperparameters = {
-        "objective": "reg:squarederror",
-        "num_round": "100",
-        "max_depth": "6",
-        "eta": "0.2",
-        "subsample": "0.8",
-        "colsample_bytree": "0.8"
-    }
-    
     # Create the training job
     sagemaker_client.create_training_job(
         TrainingJobName=job_name,
         AlgorithmSpecification={
-            'TrainingImage': f"683313688378.dkr.ecr.{REGION}.amazonaws.com/sagemaker-xgboost:1.5-1",
+            'TrainingImage': f"683313688378.dkr.ecr.{REGION}.amazonaws.com/sagemaker-xgboost:1.7-1",
             'TrainingInputMode': 'File'
         },
         RoleArn=ROLE_ARN,
@@ -253,7 +243,18 @@ def create_sagemaker_training_job(train_data_s3_uri, job_name=None):
         StoppingCondition={
             'MaxRuntimeInSeconds': 86400  # 24 hours max runtime
         },
-        HyperParameters=hyperparameters
+        HyperParameters={
+            "objective": "reg:squarederror",
+            "num_round": "100",
+            "max_depth": "6",
+            "eta": "0.2",
+            "subsample": "0.8",
+            "colsample_bytree": "0.8",
+            # Tell XGBoost how many target variables we have
+            "num_target": str(len(TARGET_FEATURES)),
+            # Configure the model for direct multi-target output
+            "multi_strategy": "one_output_per_tree"
+        }
     )
     
     logger.info(f"Training job {job_name} started. Output will be stored at {output_path}")
@@ -308,7 +309,7 @@ def create_model(job_name):
     sagemaker_client.create_model(
         ModelName=model_name,
         PrimaryContainer={
-            'Image': f"683313688378.dkr.ecr.{REGION}.amazonaws.com/sagemaker-xgboost:1.5-1",
+            'Image': f"683313688378.dkr.ecr.{REGION}.amazonaws.com/sagemaker-xgboost:1.7-1",
             'ModelDataUrl': model_artifact
         },
         ExecutionRoleArn=ROLE_ARN
@@ -429,6 +430,13 @@ def prepare_data_for_training(df):
     if y is None:
         raise ValueError("Target features not found in the data")
     
+    # Log target value ranges to help with debugging
+    for target in TARGET_FEATURES:
+        if target in y:
+            logger.info(f"Target {target} range: min={y[target].min()}, max={y[target].max()}, mean={y[target].mean()}")
+        else:
+            logger.warning(f"Target {target} not found in data")
+    
     # Create a preprocessing pipeline
     numeric_transformer = Pipeline(steps=[
         ('imputer', SimpleImputer(strategy='median')),
@@ -466,8 +474,18 @@ def prepare_data_for_training(df):
     train_data = pd.DataFrame(X_processed)
     
     # Add targets as separate columns at the beginning
+    # For multi-output regression, all target columns must be at the beginning
     for i, target in enumerate(TARGET_FEATURES):
-        train_data.insert(i, target, y[target].values)
+        if target in y:
+            train_data.insert(i, target, y[target].values)
+        else:
+            # If a target is missing, insert zeros (or appropriate default values)
+            # This ensures the model still outputs predictions for all targets
+            logger.warning(f"Target {target} missing from data, inserting zeros")
+            train_data.insert(i, target, np.zeros(len(train_data)))
+    
+    # Verify that the first len(TARGET_FEATURES) columns are the target columns
+    logger.info(f"First {len(TARGET_FEATURES)} columns in training data: {train_data.columns[:len(TARGET_FEATURES)]}")
     
     logger.info(f"Prepared data shape: {train_data.shape}")
     return train_data

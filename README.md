@@ -108,11 +108,26 @@ The system consists of several components:
 
 2. **Data Collection**: Each query execution generates a feature vector that is written to CSV files, organized by date.
 
-3. **Model Training**: A Python script that processes these CSV files, prepares the data, and trains an XGBoost model on SageMaker.
+3. **Multi-Metric Model Training**: A Python script that processes these CSV files, prepares the data, and trains an XGBoost model on SageMaker to predict all performance metrics (latency, CPU, memory) simultaneously.
 
 4. **Continuous Training**: The ability to automatically retrain the model as new data becomes available.
 
-5. **Prediction**: A Python client that can extract features from a query and predict its performance metrics.
+5. **Prediction**: A Python client that can extract features from a query and predict all performance metrics in a single inference call.
+
+## Multi-Metric Prediction
+
+Our model is designed to predict multiple performance metrics simultaneously:
+
+- **Latency (latency_ms)**: The time taken to execute the query (in milliseconds)
+- **CPU Usage (cpu_nanos)**: The CPU time consumed by the query (in nanoseconds)
+- **Memory Usage (memory_bytes)**: The memory consumed by the query (in bytes)
+
+This multi-metric approach has several advantages:
+- **Efficiency**: One model prediction provides all metrics
+- **Consistency**: The predictions are correlated as they should be
+- **Simplicity**: Only one model to maintain and update
+
+The XGBoost model is configured for multi-output regression using a "one output per tree" strategy, which creates separate trees for each target variable while sharing the same features and training process.
 
 ## Setup
 

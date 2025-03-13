@@ -141,10 +141,13 @@ class QueryPerformancePredictor:
         
         # Invoke the endpoint
         try:
+            # For multi-output XGBoost, we need to explicitly request all targets
             response = self.sagemaker_runtime.invoke_endpoint(
                 EndpointName=self.endpoint_name,
                 ContentType='text/csv',
-                Body=csv_data
+                Body=csv_data,
+                # Add Accept header to ensure we get all prediction values
+                Accept='text/csv'
             )
             
             # Parse the result
@@ -153,14 +156,26 @@ class QueryPerformancePredictor:
             
             if len(predictions) != len(TARGET_FEATURES):
                 logger.warning(f"Expected {len(TARGET_FEATURES)} predictions, got {len(predictions)}")
-            
-            # Create a dictionary with the predictions
-            prediction_dict = {}
-            for i, target in enumerate(TARGET_FEATURES):
-                if i < len(predictions):
-                    prediction_dict[target] = float(predictions[i])
-                else:
-                    prediction_dict[target] = None
+                # If we got fewer predictions than expected, handle it gracefully
+                # This could happen if the model wasn't properly trained for multi-output
+                
+                # Create a dictionary with the predictions we have
+                prediction_dict = {}
+                
+                # Add predictions for available targets
+                for i, target in enumerate(TARGET_FEATURES):
+                    if i < len(predictions):
+                        prediction_dict[target] = float(predictions[i])
+                    else:
+                        # If we're missing this target, set it to None
+                        logger.warning(f"Missing prediction for {target}, setting to None")
+                        prediction_dict[target] = None
+            else:
+                # If we got the expected number of predictions, create the dictionary
+                prediction_dict = {
+                    TARGET_FEATURES[i]: float(predictions[i]) 
+                    for i in range(len(TARGET_FEATURES))
+                }
             
             logger.info(f"Prediction successful: {prediction_dict}")
             return prediction_dict
