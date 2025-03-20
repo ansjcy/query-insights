@@ -61,7 +61,7 @@ public class QueryInsightsSettings {
     /** Default N size for top N queries */
     public static final int MAX_N_SIZE = 100;
     /** Default window size in seconds to keep the top N queries with latency data in query insight store */
-    public static final TimeValue DEFAULT_WINDOW_SIZE = new TimeValue(5, TimeUnit.MINUTES);
+    public static final TimeValue DEFAULT_WINDOW_SIZE = new TimeValue(1, TimeUnit.MINUTES);
     /** Default top N size to keep the data in query insight store */
     public static final int DEFAULT_TOP_N_SIZE = 10;
     /**
@@ -225,7 +225,7 @@ public class QueryInsightsSettings {
     /**
      * Default index pattern of top n queries
      */
-    public static final String DEFAULT_TOP_N_QUERIES_INDEX_PATTERN = "'top_queries-'YYYY.MM.dd";
+    public static final String DEFAULT_TOP_N_QUERIES_INDEX_PATTERN = "'top_queries-'YYYY.MM.dd.HH.mm";
     /**
      * Default exporter type of top queries
      */
@@ -237,7 +237,7 @@ public class QueryInsightsSettings {
     /**
      * Default Top N local indices retention period in days
      */
-    public static final int DEFAULT_DELETE_AFTER_VALUE = 7;
+    public static final int DEFAULT_DELETE_AFTER_VALUE = 3;
     /**
      * Minimum Top N local indices retention period in days
      */

@@ -158,6 +158,6 @@ public final class LocalIndexReader implements QueryInsightsReader {
     }
 
     private String buildLocalIndexName(ZonedDateTime current) {
-        return current.format(indexPattern) + "-" + generateLocalIndexDateHash(current.toLocalDate());
+        return current.format(indexPattern) + "-" + generateLocalIndexDateHash(current.toLocalDateTime());
     }
 }

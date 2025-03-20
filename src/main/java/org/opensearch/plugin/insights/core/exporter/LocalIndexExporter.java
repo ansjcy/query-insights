@@ -15,6 +15,7 @@ import static org.opensearch.plugin.insights.settings.QueryInsightsSettings.TOP_
 
 import java.io.IOException;
 import java.nio.charset.Charset;
+import java.time.LocalDateTime;
 import java.time.ZoneOffset;
 import java.time.ZonedDateTime;
 import java.time.format.DateTimeFormatter;
@@ -247,8 +248,9 @@ public class LocalIndexExporter implements QueryInsightsExporter {
      * @return A string representing the index name in the format "top_queries-YYYY.MM.dd-01234".
      */
     String buildLocalIndexName() {
-        ZonedDateTime currentTime = ZonedDateTime.now(ZoneOffset.UTC);
-        return indexPattern.format(currentTime) + "-" + generateLocalIndexDateHash(currentTime.toLocalDate());
+        LocalDateTime currentTime = LocalDateTime.now();
+
+        return indexPattern.format(currentTime) + "-" + generateLocalIndexDateHash(currentTime);
     }
 
     /**

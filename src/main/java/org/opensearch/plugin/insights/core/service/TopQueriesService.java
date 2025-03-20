@@ -545,10 +545,10 @@ public class TopQueriesService {
             }
 
             // Validate the second part is a valid date in "YYYY.MM.dd" format
-            DateTimeFormatter formatter = DateTimeFormatter.ofPattern("yyyy.MM.dd", Locale.ROOT);
-            LocalDate date;
+            DateTimeFormatter formatter = DateTimeFormatter.ofPattern("yyyy.MM.dd.HH.mm", Locale.ROOT);
+            LocalDateTime date;
             try {
-                date = LocalDate.parse(parts[1], formatter);
+                date = LocalDateTime.parse(parts[1], formatter);
             } catch (DateTimeParseException e) {
                 return false;
             }

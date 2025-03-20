@@ -9,6 +9,7 @@
 package org.opensearch.plugin.insights.core.utils;
 
 import java.time.LocalDate;
+import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.Locale;
 
@@ -26,9 +27,13 @@ public class ExporterReaderUtils {
      *
      * @return A 5-digit numeric string representation of the current date's hash.
      */
-    public static String generateLocalIndexDateHash(LocalDate date) {
+    public static String generateLocalIndexDateHash(LocalDateTime dateTime) {
+
+//        LocalDateTime dateTime = LocalDateTime.now();
+        String dateString = dateTime.format(DateTimeFormatter.ofPattern("yyyy.MM.dd HH:mm", Locale.ROOT));
+
         // Get the date string in UTC (yyyy-MM-dd format)
-        String dateString = DateTimeFormatter.ofPattern("yyyy-MM-dd", Locale.ROOT).format(date);
+//        String dateString = DateTimeFormatter.ofPattern("yyyy-MM-dd", Locale.ROOT).format(date);
 
         // Generate a 5-digit numeric hash from the date's hashCode
         return String.format(Locale.ROOT, "%05d", (dateString.hashCode() % 100000 + 100000) % 100000);

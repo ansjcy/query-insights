@@ -581,7 +581,7 @@ public class QueryInsightsService extends AbstractLifecycleComponent {
             scheduledFutures.add(
                 threadPool.scheduleWithFixedDelay(
                     this::deleteExpiredTopNIndices,
-                    new TimeValue(1, TimeUnit.DAYS), // Check for deletable indices once per day
+                    new TimeValue(1, TimeUnit.MINUTES), // Check for deletable indices once per day
                     QueryInsightsSettings.QUERY_INSIGHTS_EXECUTOR
                 )
             );
@@ -646,7 +646,7 @@ public class QueryInsightsService extends AbstractLifecycleComponent {
 
                 client.admin().cluster().state(clusterStateRequest, ActionListener.wrap(clusterStateResponse -> {
                     final Map<String, IndexMetadata> indexMetadataMap = clusterStateResponse.getState().metadata().indices();
-                    final long expirationMillisLong = System.currentTimeMillis() - TimeUnit.DAYS.toMillis(
+                    final long expirationMillisLong = System.currentTimeMillis() - TimeUnit.MINUTES.toMillis(
                         ((LocalIndexExporter) topQueriesExporter).getDeleteAfter()
                     );
                     for (Map.Entry<String, IndexMetadata> entry : indexMetadataMap.entrySet()) {
