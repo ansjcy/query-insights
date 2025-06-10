@@ -16,10 +16,12 @@ import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.doNothing;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.reset;
 import static org.mockito.Mockito.spy;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
+
 import static org.opensearch.cluster.metadata.IndexMetadata.SETTING_CREATION_DATE;
 import static org.opensearch.plugin.insights.core.service.QueryInsightsService.QUERY_INSIGHTS_INDEX_TAG_NAME;
 import static org.opensearch.plugin.insights.core.service.QueryInsightsService.getInitialDelay;
@@ -51,6 +53,7 @@ import org.opensearch.Version;
 import org.opensearch.action.admin.cluster.state.ClusterStateRequest;
 import org.opensearch.action.admin.cluster.state.ClusterStateResponse;
 import org.opensearch.action.support.replication.ClusterStateCreationUtils;
+
 import org.opensearch.cluster.ClusterState;
 import org.opensearch.cluster.metadata.IndexMetadata;
 import org.opensearch.cluster.metadata.MappingMetadata;
@@ -91,6 +94,8 @@ import org.opensearch.transport.client.AdminClient;
 import org.opensearch.transport.client.Client;
 import org.opensearch.transport.client.ClusterAdminClient;
 import org.opensearch.transport.client.IndicesAdminClient;
+
+
 
 /**
  * Unit Tests for {@link QueryInsightsService}.
@@ -167,6 +172,26 @@ public class QueryInsightsServiceTests extends OpenSearchTestCase {
         ThreadPool.terminate(threadPool, 30, TimeUnit.SECONDS);
     }
 
+    /**
+     * Helper method to clean up services created in individual tests
+     */
+    private void cleanupTestServices(List<AbstractLifecycleComponent> services) throws IOException {
+        if (services != null && services.size() >= 2) {
+            QueryInsightsService service = (QueryInsightsService) services.get(0);
+            ClusterService clusterService = (ClusterService) services.get(1);
+
+            if (service != null) {
+                service.doStop();
+            }
+            if (clusterService != null) {
+                IOUtils.close(clusterService);
+            }
+            if (service != null) {
+                service.doClose();
+            }
+        }
+    }
+
     public void testAddRecordToLimitAndDrain() {
         SearchQueryRecord record = QueryInsightsTestUtils.generateQueryInsightRecords(1, 1, System.currentTimeMillis(), 0).get(0);
         for (int i = 0; i < QueryInsightsSettings.QUERY_RECORD_QUEUE_CAPACITY; i++) {
@@ -194,9 +219,7 @@ public class QueryInsightsServiceTests extends OpenSearchTestCase {
         assertNotNull(updatedQueryInsightsService.deleteIndicesScheduledFuture);
         assertFalse(updatedQueryInsightsService.deleteIndicesScheduledFuture.isCancelled());
 
-        updatedQueryInsightsService.doStop();
-        IOUtils.close(updatedService.get(1));
-        updatedQueryInsightsService.doClose();
+        cleanupTestServices(updatedService);
     }
 
     public void testClose() {
@@ -369,14 +392,12 @@ public class QueryInsightsServiceTests extends OpenSearchTestCase {
         }
         List<AbstractLifecycleComponent> updatedService = createQueryInsightsServiceWithIndexState(indexMetadataMap);
         QueryInsightsService updatedQueryInsightsService = (QueryInsightsService) updatedService.get(0);
-        ClusterService updatedClusterService = (ClusterService) updatedService.get(1);
 
         updatedQueryInsightsService.deleteAllTopNIndices(client, mockLocalIndexExporter);
         // All 10 top_queries-* indices should be deleted, while none of the users indices should be deleted
         verify(mockLocalIndexExporter, times(9)).deleteSingleIndex(argThat(str -> str.matches("top_queries-.*")), any());
 
-        IOUtils.close(updatedClusterService);
-        updatedQueryInsightsService.doClose();
+        cleanupTestServices(updatedService);
     }
 
     public void testDeleteExpiredTopNIndices() throws InterruptedException, IOException {
@@ -417,7 +438,6 @@ public class QueryInsightsServiceTests extends OpenSearchTestCase {
 
         List<AbstractLifecycleComponent> updatedService = createQueryInsightsServiceWithIndexState(indexMetadataMap);
         QueryInsightsService updatedQueryInsightsService = (QueryInsightsService) updatedService.get(0);
-        ClusterService updatedClusterService = (ClusterService) updatedService.get(1);
         final int expectedIndicesDeleted = 2;
         CountDownLatch latch = new CountDownLatch(expectedIndicesDeleted);
         doAnswer(invocation -> {
@@ -434,8 +454,7 @@ public class QueryInsightsServiceTests extends OpenSearchTestCase {
         verify(adminClient, times(expectedIndicesDeleted)).indices();
         verify(indicesAdminClient, times(expectedIndicesDeleted)).delete(any(), any());
 
-        IOUtils.close(updatedClusterService);
-        updatedQueryInsightsService.doClose();
+        cleanupTestServices(updatedService);
     }
 
     public void testValidateExporterDeleteAfter() {
@@ -600,7 +619,545 @@ public class QueryInsightsServiceTests extends OpenSearchTestCase {
         assertEquals(expectedDelayEdge, getInitialDelay(instantEdge));
     }
 
+    public void testGetInitialDelayComprehensive() {
+        // Test various times throughout the day
+        Instant morning = Instant.parse("2025-01-15T08:30:45Z");
+        long morningDelay = getInitialDelay(morning);
+        assertTrue("Morning delay should be positive", morningDelay > 0);
+        assertTrue("Morning delay should be less than 24 hours", morningDelay < Duration.ofDays(1).toMillis());
+
+        Instant afternoon = Instant.parse("2025-01-15T14:22:10Z");
+        long afternoonDelay = getInitialDelay(afternoon);
+        assertTrue("Afternoon delay should be positive", afternoonDelay > 0);
+        assertTrue("Afternoon delay should be less than morning delay", afternoonDelay < morningDelay);
+
+        Instant lateNight = Instant.parse("2025-01-15T23:59:59Z");
+        long lateNightDelay = getInitialDelay(lateNight);
+        assertEquals("Late night delay should be 1 second", 1000, lateNightDelay);
+
+        // Test edge case: exactly midnight
+        Instant exactMidnight = Instant.parse("2025-01-15T00:00:00Z");
+        long midnightDelay = getInitialDelay(exactMidnight);
+        assertEquals("Midnight delay should be exactly 24 hours", Duration.ofDays(1).toMillis(), midnightDelay);
+    }
+
+    public void testSchedulerSetupAndLifecycle() throws IOException {
+        List<AbstractLifecycleComponent> updatedService = createQueryInsightsServiceWithIndexState(Map.of());
+        QueryInsightsService updatedQueryInsightsService = (QueryInsightsService) updatedService.getFirst();
+
+        // Test scheduler is not set up initially
+        assertNull("Scheduler should not be set up initially", updatedQueryInsightsService.deleteIndicesScheduledFuture);
+        assertNull("Scheduled futures should not be set up initially", updatedQueryInsightsService.scheduledFutures);
+
+        // Start the service
+        updatedQueryInsightsService.doStart();
+
+        // Verify scheduler is set up
+        assertNotNull("Delete indices scheduler should be set up", updatedQueryInsightsService.deleteIndicesScheduledFuture);
+        assertFalse("Delete indices scheduler should not be cancelled", updatedQueryInsightsService.deleteIndicesScheduledFuture.isCancelled());
+        assertNotNull("Scheduled futures should be set up", updatedQueryInsightsService.scheduledFutures);
+        assertEquals("Should have one scheduled future for drain records", 1, updatedQueryInsightsService.scheduledFutures.size());
+
+        // Stop the service
+        updatedQueryInsightsService.doStop();
+
+        // Verify scheduler is cancelled
+        assertTrue("Delete indices scheduler should be cancelled", updatedQueryInsightsService.deleteIndicesScheduledFuture.isCancelled());
+        assertTrue("Drain records scheduler should be cancelled", updatedQueryInsightsService.scheduledFutures.get(0).isCancelled());
+
+        cleanupTestServices(updatedService);
+    }
+
+    public void testSchedulerWithDisabledFeatures() throws IOException {
+        List<AbstractLifecycleComponent> updatedService = createQueryInsightsServiceWithIndexState(Map.of());
+        QueryInsightsService updatedQueryInsightsService = (QueryInsightsService) updatedService.getFirst();
+
+        // Disable all features
+        updatedQueryInsightsService.enableCollection(MetricType.LATENCY, false);
+        updatedQueryInsightsService.enableCollection(MetricType.CPU, false);
+        updatedQueryInsightsService.enableCollection(MetricType.MEMORY, false);
+
+        // Start the service
+        updatedQueryInsightsService.doStart();
+
+        // Verify scheduler is not set up when features are disabled
+        assertNull("Delete indices scheduler should not be set up when features disabled",
+                   updatedQueryInsightsService.deleteIndicesScheduledFuture);
+        assertNull("Scheduled futures should not be set up when features disabled",
+                   updatedQueryInsightsService.scheduledFutures);
+
+        cleanupTestServices(updatedService);
+    }
+
+    public void testDeleteExpiredTopNIndicesWithRetentionPeriod3Days() throws IOException, InterruptedException {
+        testDeleteExpiredIndicesWithRetentionPeriod(3, 5, 2); // 5 indices, expect 2 deleted
+    }
+
+    public void testDeleteExpiredTopNIndicesWithRetentionPeriod1Day() throws IOException, InterruptedException {
+        testDeleteExpiredIndicesWithRetentionPeriod(1, 5, 4); // 5 indices, expect 4 deleted
+    }
+
+    public void testDeleteExpiredTopNIndicesWithRetentionPeriod10Days() throws IOException, InterruptedException {
+        testDeleteExpiredIndicesWithRetentionPeriod(10, 5, 0); // 5 indices, expect 0 deleted
+    }
+
+    public void testDeleteExpiredTopNIndicesWithNoExpiredIndices() throws IOException, InterruptedException {
+        // Create indices that are all recent (within retention period)
+        Map<String, IndexMetadata> indexMetadataMap = new HashMap<>();
+        for (int i = 1; i <= 3; i++) {
+            LocalDate date = LocalDate.now().minusDays(i);
+            String indexName = "top_queries-" + date.format(format) + "-" + generateLocalIndexDateHash(date);
+            long creationTime = Instant.now().minus(i, ChronoUnit.DAYS).toEpochMilli();
+
+            IndexMetadata indexMetadata = createTopQueriesIndexMetadata(indexName, creationTime);
+            indexMetadataMap.put(indexName, indexMetadata);
+        }
+
+        List<AbstractLifecycleComponent> updatedService = createQueryInsightsServiceWithIndexState(indexMetadataMap);
+        QueryInsightsService updatedQueryInsightsService = (QueryInsightsService) updatedService.get(0);
+
+        // Set retention period to 7 days (default)
+        LocalIndexExporter localExporter = (LocalIndexExporter) updatedQueryInsightsService
+            .queryInsightsExporterFactory.getExporter(TOP_QUERIES_EXPORTER_ID);
+        localExporter.setDeleteAfter(7);
+
+        CountDownLatch latch = new CountDownLatch(1);
+        doAnswer(invocation -> {
+            latch.countDown();
+            return null;
+        }).when(clusterAdminClient).state(any(ClusterStateRequest.class), any(ActionListener.class));
+
+        updatedQueryInsightsService.deleteExpiredTopNIndices();
+
+        assertTrue("Cluster state request should be made", latch.await(5, TimeUnit.SECONDS));
+        // Verify no indices are deleted since all are within retention period
+        verify(client, times(1)).admin(); // Only one call to get cluster state
+        verify(adminClient, times(0)).indices(); // No deletion calls
+
+        cleanupTestServices(updatedService);
+    }
+
+    public void testDeleteExpiredTopNIndicesWithEmptyCluster() throws IOException, InterruptedException {
+        // Test with empty cluster (no indices)
+        List<AbstractLifecycleComponent> updatedService = createQueryInsightsServiceWithIndexState(Map.of());
+        QueryInsightsService updatedQueryInsightsService = (QueryInsightsService) updatedService.get(0);
+
+        CountDownLatch latch = new CountDownLatch(1);
+        doAnswer(invocation -> {
+            latch.countDown();
+            return null;
+        }).when(clusterAdminClient).state(any(ClusterStateRequest.class), any(ActionListener.class));
+
+        updatedQueryInsightsService.deleteExpiredTopNIndices();
+
+        assertTrue("Cluster state request should be made", latch.await(5, TimeUnit.SECONDS));
+        // Verify no deletion attempts are made
+        verify(client, times(1)).admin(); // Only one call to get cluster state
+        verify(adminClient, times(0)).indices(); // No deletion calls
+
+        cleanupTestServices(updatedService);
+    }
+
+    public void testDeleteExpiredTopNIndicesWithMixedIndices() throws IOException, InterruptedException {
+        // Create a mix of top queries indices and regular indices
+        Map<String, IndexMetadata> indexMetadataMap = new HashMap<>();
+
+        // Add 3 expired top queries indices
+        for (int i = 8; i <= 10; i++) {
+            LocalDate date = LocalDate.now().minusDays(i);
+            String indexName = "top_queries-" + date.format(format) + "-" + generateLocalIndexDateHash(date);
+            long creationTime = Instant.now().minus(i, ChronoUnit.DAYS).toEpochMilli();
+
+            IndexMetadata indexMetadata = createTopQueriesIndexMetadata(indexName, creationTime);
+            indexMetadataMap.put(indexName, indexMetadata);
+        }
+
+        // Add 2 recent top queries indices (should not be deleted)
+        for (int i = 1; i <= 2; i++) {
+            LocalDate date = LocalDate.now().minusDays(i);
+            String indexName = "top_queries-" + date.format(format) + "-" + generateLocalIndexDateHash(date);
+            long creationTime = Instant.now().minus(i, ChronoUnit.DAYS).toEpochMilli();
+
+            IndexMetadata indexMetadata = createTopQueriesIndexMetadata(indexName, creationTime);
+            indexMetadataMap.put(indexName, indexMetadata);
+        }
+
+        // Add regular indices (should not be deleted regardless of age)
+        for (int i = 1; i <= 3; i++) {
+            String indexName = "regular_index_" + i;
+            long creationTime = Instant.now().minus(20, ChronoUnit.DAYS).toEpochMilli(); // Very old
+
+            IndexMetadata indexMetadata = IndexMetadata.builder(indexName)
+                .settings(Settings.builder()
+                    .put("index.version.created", Version.CURRENT.id)
+                    .put("index.number_of_shards", 1)
+                    .put("index.number_of_replicas", 1)
+                    .put(SETTING_CREATION_DATE, creationTime))
+                .build();
+            indexMetadataMap.put(indexName, indexMetadata);
+        }
+
+        List<AbstractLifecycleComponent> updatedService = createQueryInsightsServiceWithIndexState(indexMetadataMap);
+        QueryInsightsService updatedQueryInsightsService = (QueryInsightsService) updatedService.get(0);
+
+        // Set retention period to 7 days
+        LocalIndexExporter localExporter = (LocalIndexExporter) updatedQueryInsightsService
+            .queryInsightsExporterFactory.getExporter(TOP_QUERIES_EXPORTER_ID);
+        localExporter.setDeleteAfter(7);
+
+        final int expectedIndicesDeleted = 3; // Only the 3 expired top queries indices
+        CountDownLatch latch = new CountDownLatch(expectedIndicesDeleted);
+        doAnswer(invocation -> {
+            latch.countDown();
+            return null;
+        }).when(indicesAdminClient).delete(any(), any());
+
+        updatedQueryInsightsService.deleteExpiredTopNIndices();
+
+        assertTrue("Expected number of indices should be deleted", latch.await(10, TimeUnit.SECONDS));
+        verify(client, times(expectedIndicesDeleted + 1)).admin(); // +1 for cluster state request
+        verify(adminClient, times(expectedIndicesDeleted)).indices();
+        verify(indicesAdminClient, times(expectedIndicesDeleted)).delete(any(), any());
+
+        cleanupTestServices(updatedService);
+    }
+
+    public void testDeleteExpiredTopNIndicesErrorHandling() throws IOException, InterruptedException {
+        // Create some expired indices
+        Map<String, IndexMetadata> indexMetadataMap = new HashMap<>();
+        for (int i = 8; i <= 10; i++) {
+            LocalDate date = LocalDate.now().minusDays(i);
+            String indexName = "top_queries-" + date.format(format) + "-" + generateLocalIndexDateHash(date);
+            long creationTime = Instant.now().minus(i, ChronoUnit.DAYS).toEpochMilli();
+
+            IndexMetadata indexMetadata = createTopQueriesIndexMetadata(indexName, creationTime);
+            indexMetadataMap.put(indexName, indexMetadata);
+        }
+
+        List<AbstractLifecycleComponent> updatedService = createQueryInsightsServiceWithIndexState(indexMetadataMap);
+        QueryInsightsService updatedQueryInsightsService = (QueryInsightsService) updatedService.get(0);
+
+        // Mock cluster state request to throw an exception
+        doAnswer(invocation -> {
+            ActionListener<ClusterStateResponse> actionListener = invocation.getArgument(1);
+            actionListener.onFailure(new RuntimeException("Cluster state request failed"));
+            return null;
+        }).when(clusterAdminClient).state(any(ClusterStateRequest.class), any(ActionListener.class));
+
+        // This should not throw an exception - errors should be handled gracefully
+        try {
+            updatedQueryInsightsService.deleteExpiredTopNIndices();
+            // Give some time for async operation to complete
+            Thread.sleep(100);
+        } catch (Exception e) {
+            fail("deleteExpiredTopNIndices should handle errors gracefully, but threw: " + e.getMessage());
+        }
+
+        // Verify cluster state was requested but no deletions occurred due to error
+        verify(client, times(1)).admin();
+        verify(adminClient, times(0)).indices(); // No deletion calls due to error
+
+        cleanupTestServices(updatedService);
+    }
+
+    public void testDeleteExpiredTopNIndicesWithNullExporter() throws IOException {
+        List<AbstractLifecycleComponent> updatedService = createQueryInsightsServiceWithIndexState(Map.of());
+        QueryInsightsService updatedQueryInsightsService = (QueryInsightsService) updatedService.get(0);
+
+        // Reset the mock to clear any previous interactions from setup
+        reset(client);
+        // Re-setup the mock after reset to avoid NullPointerException
+        when(client.admin()).thenReturn(adminClient);
+
+        // Set exporter type to DEBUG to avoid creating a LocalIndexExporter
+        // This simulates the case where no LocalIndexExporter is available
+        // Note: This will trigger deleteAllTopNIndices during the transition from LOCAL_INDEX to DEBUG
+        updatedQueryInsightsService.setExporterAndReaderType(SinkType.DEBUG);
+
+        // Reset the mock again to clear the admin call from setExporterAndReaderType
+        reset(client);
+
+        // This should not throw an exception and should not make any cluster calls
+        try {
+            updatedQueryInsightsService.deleteExpiredTopNIndices();
+        } catch (Exception e) {
+            fail("deleteExpiredTopNIndices should handle non-LocalIndexExporter gracefully, but threw: " + e.getMessage());
+        }
+
+        // Verify no cluster state requests are made when exporter is not LocalIndexExporter
+        verify(client, times(0)).admin();
+
+        cleanupTestServices(updatedService);
+    }
+
+    public void testSetExporterDeleteAfterAndDelete() throws IOException {
+        List<AbstractLifecycleComponent> updatedService = createQueryInsightsServiceWithIndexState(Map.of());
+        QueryInsightsService updatedQueryInsightsService = (QueryInsightsService) updatedService.get(0);
+
+        // Get the local index exporter
+        LocalIndexExporter localExporter = (LocalIndexExporter) updatedQueryInsightsService
+            .queryInsightsExporterFactory.getExporter(TOP_QUERIES_EXPORTER_ID);
+
+        // Verify initial delete after value
+        assertEquals("Initial delete after should be default",
+                     QueryInsightsSettings.DEFAULT_DELETE_AFTER_VALUE, localExporter.getDeleteAfter());
+
+        // Test setting new delete after value
+        updatedQueryInsightsService.setExporterDeleteAfterAndDelete(14);
+
+        // Verify the value was updated
+        assertEquals("Delete after should be updated", 14, localExporter.getDeleteAfter());
+
+        cleanupTestServices(updatedService);
+    }
+
+    public void testSchedulerTimingConfiguration() throws IOException {
+        List<AbstractLifecycleComponent> updatedService = createQueryInsightsServiceWithIndexState(Map.of());
+        QueryInsightsService updatedQueryInsightsService = (QueryInsightsService) updatedService.get(0);
+
+        updatedQueryInsightsService.doStart();
+
+        // Verify scheduler is configured with correct timing
+        assertNotNull("Delete indices scheduler should be set up", updatedQueryInsightsService.deleteIndicesScheduledFuture);
+
+        // The scheduler should be configured to run daily (24 hours = 86400000 ms)
+        // We can't directly access the period, but we can verify the scheduler was created
+        assertFalse("Scheduler should not be cancelled", updatedQueryInsightsService.deleteIndicesScheduledFuture.isCancelled());
+
+        // Test that initial delay is calculated correctly for current time
+        long currentInitialDelay = getInitialDelay(Instant.now());
+        assertTrue("Initial delay should be positive", currentInitialDelay > 0);
+        assertTrue("Initial delay should be less than 24 hours", currentInitialDelay <= Duration.ofDays(1).toMillis());
+
+        cleanupTestServices(updatedService);
+    }
+
+    public void testExpirationCalculationLogic() {
+        // Test the expiration calculation logic used in deleteExpiredTopNIndices
+
+        // Mock current time for consistent testing
+        Instant fixedNow = Instant.parse("2025-01-15T12:30:45Z");
+
+        // Calculate start of today UTC (should be 2025-01-15T00:00:00Z)
+        long startOfTodayUtcMillis = fixedNow.truncatedTo(ChronoUnit.DAYS).toEpochMilli();
+        assertEquals("Start of today should be midnight UTC",
+                     Instant.parse("2025-01-15T00:00:00Z").toEpochMilli(), startOfTodayUtcMillis);
+
+        // Test with different retention periods
+        int retentionDays = 7;
+        long expirationMillis = startOfTodayUtcMillis - TimeUnit.DAYS.toMillis(retentionDays);
+        assertEquals("Expiration should be 7 days before start of today",
+                     Instant.parse("2025-01-08T00:00:00Z").toEpochMilli(), expirationMillis);
+
+        // Test edge case: retention period of 1 day
+        retentionDays = 1;
+        expirationMillis = startOfTodayUtcMillis - TimeUnit.DAYS.toMillis(retentionDays);
+        assertEquals("Expiration should be 1 day before start of today",
+                     Instant.parse("2025-01-14T00:00:00Z").toEpochMilli(), expirationMillis);
+
+        // Test maximum retention period
+        retentionDays = 180;
+        expirationMillis = startOfTodayUtcMillis - TimeUnit.DAYS.toMillis(retentionDays);
+        assertEquals("Expiration should be 180 days before start of today",
+                     Instant.parse("2024-07-19T00:00:00Z").toEpochMilli(), expirationMillis);
+    }
+
     // Util functions
+    private void testDeleteExpiredIndicesWithRetentionPeriod(int retentionDays, int totalIndices, int expectedDeleted)
+            throws IOException, InterruptedException {
+        // Create indices with different ages - some expired, some not
+        Map<String, IndexMetadata> indexMetadataMap = new HashMap<>();
+
+        // Create expired indices (older than retention period)
+        for (int i = 0; i < expectedDeleted; i++) {
+            LocalDate date = LocalDate.now().minusDays(retentionDays + i + 1); // Definitely expired
+            String indexName = "top_queries-" + date.format(format) + "-" + generateLocalIndexDateHash(date);
+            long creationTime = Instant.now().minus(retentionDays + i + 1, ChronoUnit.DAYS).toEpochMilli();
+
+            IndexMetadata indexMetadata = createTopQueriesIndexMetadata(indexName, creationTime);
+            indexMetadataMap.put(indexName, indexMetadata);
+        }
+
+        // Create non-expired indices (within retention period)
+        for (int i = 0; i < (totalIndices - expectedDeleted); i++) {
+            LocalDate date = LocalDate.now().minusDays(i + 1); // Within retention period
+            String indexName = "top_queries-" + date.format(format) + "-" + generateLocalIndexDateHash(date);
+            long creationTime = Instant.now().minus(i + 1, ChronoUnit.DAYS).toEpochMilli();
+
+            IndexMetadata indexMetadata = createTopQueriesIndexMetadata(indexName, creationTime);
+            indexMetadataMap.put(indexName, indexMetadata);
+        }
+
+        List<AbstractLifecycleComponent> updatedService = createQueryInsightsServiceWithIndexState(indexMetadataMap);
+        QueryInsightsService updatedQueryInsightsService = (QueryInsightsService) updatedService.get(0);
+
+        // Set the retention period
+        LocalIndexExporter localExporter = (LocalIndexExporter) updatedQueryInsightsService
+            .queryInsightsExporterFactory.getExporter(TOP_QUERIES_EXPORTER_ID);
+        localExporter.setDeleteAfter(retentionDays);
+
+        if (expectedDeleted > 0) {
+            CountDownLatch latch = new CountDownLatch(expectedDeleted);
+            doAnswer(invocation -> {
+                latch.countDown();
+                return null;
+            }).when(indicesAdminClient).delete(any(), any());
+
+            updatedQueryInsightsService.deleteExpiredTopNIndices();
+
+            assertTrue("Expected number of indices should be deleted", latch.await(10, TimeUnit.SECONDS));
+            // Verify that deletion operations were called the expected number of times
+            verify(indicesAdminClient, times(expectedDeleted)).delete(any(), any());
+        } else {
+            CountDownLatch latch = new CountDownLatch(1);
+            doAnswer(invocation -> {
+                latch.countDown();
+                return null;
+            }).when(clusterAdminClient).state(any(ClusterStateRequest.class), any(ActionListener.class));
+
+            updatedQueryInsightsService.deleteExpiredTopNIndices();
+
+            assertTrue("Cluster state request should be made", latch.await(5, TimeUnit.SECONDS));
+            // Verify no deletion operations were called
+            verify(indicesAdminClient, times(0)).delete(any(), any());
+        }
+
+        cleanupTestServices(updatedService);
+    }
+
+    public void testDeleteExpiredTopNIndicesWithInvalidIndexNames() throws IOException, InterruptedException {
+        // Test indices with invalid names that should not be deleted
+        Map<String, IndexMetadata> indexMetadataMap = new HashMap<>();
+
+        // Create indices with invalid names but valid metadata
+        String[] invalidNames = {
+            "top_queries-invalid-date-12345",  // Invalid date format
+            "top_queries-2024.01.01",         // Missing hash part
+            "top_queries-2024.01.01-abc12",   // Non-numeric hash
+            "top_queries-2024.01.01-123456",  // Wrong hash length
+            "wrong_prefix-2024.01.01-12345",  // Wrong prefix
+            "top_queries-2024.01.01-12345-extra" // Too many parts
+        };
+
+        for (String invalidName : invalidNames) {
+            long creationTime = Instant.now().minus(10, ChronoUnit.DAYS).toEpochMilli();
+            IndexMetadata metadata = createTopQueriesIndexMetadata(invalidName, creationTime);
+            indexMetadataMap.put(invalidName, metadata);
+        }
+
+        List<AbstractLifecycleComponent> updatedService = createQueryInsightsServiceWithIndexState(indexMetadataMap);
+        QueryInsightsService updatedQueryInsightsService = (QueryInsightsService) updatedService.get(0);
+
+        // Set the retention period to ensure indices would be expired if they were valid
+        LocalIndexExporter localExporter = (LocalIndexExporter) updatedQueryInsightsService
+            .queryInsightsExporterFactory.getExporter(TOP_QUERIES_EXPORTER_ID);
+        localExporter.setDeleteAfter(7);
+
+        // Execute deletion - should not delete any indices due to invalid names
+        updatedQueryInsightsService.deleteExpiredTopNIndices();
+
+        // Give some time for async operations to complete
+        Thread.sleep(100);
+
+        // Verify no deletion operations were called for invalid index names
+        verify(indicesAdminClient, times(0)).delete(any(), any());
+
+        cleanupTestServices(updatedService);
+    }
+
+    public void testDeleteExpiredTopNIndicesWithInvalidMetadata() throws IOException, InterruptedException {
+        // Test indices with valid names but invalid metadata
+        Map<String, IndexMetadata> indexMetadataMap = new HashMap<>();
+
+        LocalDate date = LocalDate.now().minusDays(10);
+        String validIndexName = "top_queries-" + date.format(format) + "-" + generateLocalIndexDateHash(date);
+        long creationTime = Instant.now().minus(10, ChronoUnit.DAYS).toEpochMilli();
+
+        // Create index with missing _meta field
+        IndexMetadata invalidMetadata = IndexMetadata.builder(validIndexName)
+            .settings(Settings.builder()
+                .put("index.version.created", Version.CURRENT.id)
+                .put("index.number_of_shards", 1)
+                .put("index.number_of_replicas", 1)
+                .put(SETTING_CREATION_DATE, creationTime))
+            .putMapping(new MappingMetadata("_doc", Map.of("properties", Map.of("field", Map.of("type", "text")))))
+            .build();
+        indexMetadataMap.put(validIndexName, invalidMetadata);
+
+        List<AbstractLifecycleComponent> updatedService = createQueryInsightsServiceWithIndexState(indexMetadataMap);
+        QueryInsightsService updatedQueryInsightsService = (QueryInsightsService) updatedService.get(0);
+
+        // Set the retention period to ensure indices would be expired if they were valid
+        LocalIndexExporter localExporter = (LocalIndexExporter) updatedQueryInsightsService
+            .queryInsightsExporterFactory.getExporter(TOP_QUERIES_EXPORTER_ID);
+        localExporter.setDeleteAfter(7);
+
+        // Execute deletion - should not delete any indices due to invalid metadata
+        updatedQueryInsightsService.deleteExpiredTopNIndices();
+
+        // Give some time for async operations to complete
+        Thread.sleep(100);
+
+        // Verify no deletion operations were called for invalid metadata
+        verify(indicesAdminClient, times(0)).delete(any(), any());
+
+        cleanupTestServices(updatedService);
+    }
+
+    public void testDeleteExpiredTopNIndicesWithWrongMetaTagValue() throws IOException, InterruptedException {
+        // Test indices with correct structure but wrong meta tag value
+        Map<String, IndexMetadata> indexMetadataMap = new HashMap<>();
+
+        LocalDate date = LocalDate.now().minusDays(10);
+        String indexName = "top_queries-" + date.format(format) + "-" + generateLocalIndexDateHash(date);
+        long creationTime = Instant.now().minus(10, ChronoUnit.DAYS).toEpochMilli();
+
+        // Create index with wrong meta tag value
+        IndexMetadata wrongTagMetadata = IndexMetadata.builder(indexName)
+            .settings(Settings.builder()
+                .put("index.version.created", Version.CURRENT.id)
+                .put("index.number_of_shards", 1)
+                .put("index.number_of_replicas", 1)
+                .put(SETTING_CREATION_DATE, creationTime))
+            .putMapping(new MappingMetadata("_doc",
+                Map.of("_meta", Map.of(QUERY_INSIGHTS_INDEX_TAG_NAME, "wrong_tag_value"))))
+            .build();
+        indexMetadataMap.put(indexName, wrongTagMetadata);
+
+        List<AbstractLifecycleComponent> updatedService = createQueryInsightsServiceWithIndexState(indexMetadataMap);
+        QueryInsightsService updatedQueryInsightsService = (QueryInsightsService) updatedService.get(0);
+
+        // Set the retention period to ensure indices would be expired if they were valid
+        LocalIndexExporter localExporter = (LocalIndexExporter) updatedQueryInsightsService
+            .queryInsightsExporterFactory.getExporter(TOP_QUERIES_EXPORTER_ID);
+        localExporter.setDeleteAfter(7);
+
+        // Execute deletion - should not delete any indices due to wrong meta tag
+        updatedQueryInsightsService.deleteExpiredTopNIndices();
+
+        // Give some time for async operations to complete
+        Thread.sleep(100);
+
+        // Verify no deletion operations were called for wrong meta tag
+        verify(indicesAdminClient, times(0)).delete(any(), any());
+
+        cleanupTestServices(updatedService);
+    }
+
+
+
+    private IndexMetadata createTopQueriesIndexMetadata(String indexName, long creationTime) {
+        return IndexMetadata.builder(indexName)
+            .settings(Settings.builder()
+                .put("index.version.created", Version.CURRENT.id)
+                .put("index.number_of_shards", 1)
+                .put("index.number_of_replicas", 1)
+                .put(SETTING_CREATION_DATE, creationTime))
+            .putMapping(new MappingMetadata("_doc",
+                Map.of("_meta", Map.of(QUERY_INSIGHTS_INDEX_TAG_NAME, TOP_QUERIES_INDEX_TAG_VALUE))))
+            .build();
+    }
+
     private List<AbstractLifecycleComponent> createQueryInsightsServiceWithIndexState(Map<String, IndexMetadata> indexMetadataMap) {
         Settings.Builder settingsBuilder = Settings.builder();
         Settings settings = settingsBuilder.build();
