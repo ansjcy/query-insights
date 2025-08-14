@@ -999,6 +999,10 @@ public final class QueryInsightsListener extends SearchRequestOperationsListener
         Object source = record.getAttributes().get(Attribute.SOURCE);
         if (source != null) {
             String sourceStr = source.toString().toLowerCase();
+            if (sourceStr.contains("aggregations")) return "AGGREGATION";
+            if (sourceStr.contains("function_score")) return "FUNCTION_SCORE";
+            if (sourceStr.contains("script_score")) return "SCRIPT_SCORE";
+            if (sourceStr.contains("nested")) return "NESTED";
             if (sourceStr.contains("range")) return "RANGE";
             if (sourceStr.contains("match_all")) return "MATCH_ALL";
             if (sourceStr.contains("match_phrase")) return "MATCH_PHRASE";
@@ -1013,8 +1017,6 @@ public final class QueryInsightsListener extends SearchRequestOperationsListener
             if (sourceStr.contains("regexp")) return "REGEXP";
             if (sourceStr.contains("exists")) return "EXISTS";
             if (sourceStr.contains("ids")) return "IDS";
-            // More:
-            if (sourceStr.contains("nested")) return "NESTED";
             if (sourceStr.contains("geo_polygon")) return "GEO_POLYGON";
             if (sourceStr.contains("geo_distance")) return "GEO_DISTANCE";
             if (sourceStr.contains("geo_bounding_box")) return "GEO_BOUNDING_BOX";
