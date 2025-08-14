@@ -105,9 +105,17 @@ public class SearchQueryRecord implements ToXContentObject, Writeable {
      */
     public static final String ID = "id";
     /**
+     * is_cancelled
+     */
+    public static final String IS_CANCELLED = "is_cancelled";
+    /**
      * A map indicating for which metric type(s) this record was in the Top N
      */
     public static final String TOP_N_QUERY = "top_n_query";
+    /**
+     * Query structure features for ML model training
+     */
+    public static final String QUERY_FEATURES = "query_features";
     /**
      * Default, immutable `top_n_query` map. All values initialized to {@code false}
      */
@@ -278,6 +286,9 @@ public class SearchQueryRecord implements ToXContentObject, Writeable {
                     case NODE_ID:
                         attributes.put(Attribute.NODE_ID, parser.text());
                         break;
+                    case IS_CANCELLED:
+                        attributes.put(Attribute.IS_CANCELLED, parser.booleanValue());
+                        break;
                     case TASK_RESOURCE_USAGES:
                         XContentParserUtils.ensureExpectedToken(XContentParser.Token.START_ARRAY, parser.currentToken(), parser);
                         List<TaskResourceInfo> tasksResourceUsages = new ArrayList<>();
@@ -334,6 +345,40 @@ public class SearchQueryRecord implements ToXContentObject, Writeable {
                             metricTypeMap.put(metricName, parser.booleanValue());
                         }
                         attributes.put(Attribute.TOP_N_QUERY, metricTypeMap);
+                        break;
+                    case QUERY_FEATURES:
+                        XContentParserUtils.ensureExpectedToken(XContentParser.Token.START_OBJECT, parser.currentToken(), parser);
+                        Map<String, Object> queryFeatures = new HashMap<>();
+                        while (parser.nextToken() != XContentParser.Token.END_OBJECT) {
+                            String featureName = parser.currentName();
+                            parser.nextToken();
+                            switch (parser.currentToken()) {
+                                case VALUE_NULL:
+                                    queryFeatures.put(featureName, null);
+                                    break;
+                                case VALUE_STRING:
+                                    queryFeatures.put(featureName, parser.text());
+                                    break;
+                                case VALUE_NUMBER:
+                                    queryFeatures.put(featureName, parser.numberValue());
+                                    break;
+                                case VALUE_BOOLEAN:
+                                    queryFeatures.put(featureName, parser.booleanValue());
+                                    break;
+                                case START_OBJECT:
+                                    // Skip nested objects for now
+                                    parser.skipChildren();
+                                    break;
+                                case START_ARRAY:
+                                    // Skip arrays for now
+                                    parser.skipChildren();
+                                    break;
+                                default:
+                                    // Skip other types
+                                    break;
+                            }
+                        }
+                        attributes.put(Attribute.QUERY_FEATURES, queryFeatures);
                         break;
                     default:
                         break;
@@ -588,6 +633,10 @@ public class SearchQueryRecord implements ToXContentObject, Writeable {
         return this.groupingId;
     }
 
+    public boolean isCancelled() {
+        return (Boolean) attributes.getOrDefault(Attribute.IS_CANCELLED, false);
+    }
+
     /**
      * Creates a new {@link SearchQueryRecord} by removing specific attributes
      * from the attributes map. The original record remains unchanged.
@@ -604,5 +653,4 @@ public class SearchQueryRecord implements ToXContentObject, Writeable {
         }
         return simplifiedRecord;
     }
-
 }
