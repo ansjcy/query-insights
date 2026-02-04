@@ -31,6 +31,10 @@ public class TopQueriesResponse extends BaseNodesResponse<TopQueries> implements
     private static final String CLUSTER_LEVEL_RESULTS_KEY = "top_queries";
     private final MetricType metricType;
 
+    // Transient fields for recommendation enrichment (not serialized)
+    private transient boolean recommendationsRequested;
+    private transient org.opensearch.plugin.insights.core.service.recommendations.RecommendationService recommendationService;
+
     /**
      * Constructor for TopQueriesResponse.
      *
@@ -40,6 +44,8 @@ public class TopQueriesResponse extends BaseNodesResponse<TopQueries> implements
     public TopQueriesResponse(final StreamInput in) throws IOException {
         super(in);
         metricType = in.readEnum(MetricType.class);
+        this.recommendationsRequested = false;
+        this.recommendationService = null;
     }
 
     /**
@@ -58,6 +64,21 @@ public class TopQueriesResponse extends BaseNodesResponse<TopQueries> implements
     ) {
         super(clusterName, nodes, failures);
         this.metricType = metricType;
+        this.recommendationsRequested = false;
+        this.recommendationService = null;
+    }
+
+    /**
+     * Set recommendation enrichment context for serialization.
+     * This should be called before toXContent() if recommendations are requested.
+     *
+     * @param recommendationService The service to hydrate recommendation hashes
+     */
+    public void setRecommendationContext(
+        org.opensearch.plugin.insights.core.service.recommendations.RecommendationService recommendationService
+    ) {
+        this.recommendationsRequested = true;
+        this.recommendationService = recommendationService;
     }
 
     /**
@@ -119,7 +140,12 @@ public class TopQueriesResponse extends BaseNodesResponse<TopQueries> implements
             .collect(Collectors.toList());
         builder.startArray(CLUSTER_LEVEL_RESULTS_KEY);
         for (SearchQueryRecord record : all_records) {
-            record.toXContent(builder, params);
+            // Use hydrated serialization if recommendations were requested
+            if (recommendationsRequested && recommendationService != null) {
+                record.toXContentWithRecommendations(builder, params, recommendationService);
+            } else {
+                record.toXContent(builder, params);
+            }
         }
         builder.endArray();
     }

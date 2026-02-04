@@ -99,12 +99,23 @@ public class TransportTopQueriesAction extends TransportNodesAction<
     ) {
         List<TopQueries> inMemoryTopQueries = inMemoryQueriesResponse.getNodes();
         List<FailedNodeException> inMemoryDataFailures = inMemoryQueriesResponse.failures();
+
         String from = request.getFrom();
         String to = request.getTo();
         if (from != null && to != null) {
             fetchHistoricalData(request, inMemoryTopQueries, inMemoryDataFailures, finalListener);
         } else {
-            finalListener.onResponse(inMemoryQueriesResponse);
+            TopQueriesResponse response = new TopQueriesResponse(
+                clusterService.getClusterName(),
+                inMemoryTopQueries,
+                inMemoryDataFailures,
+                request.getMetricType()
+            );
+            // Set recommendation context if requested (hydration happens during serialization)
+            if (Boolean.TRUE.equals(request.getRecommendations())) {
+                response.setRecommendationContext(queryInsightsService.getRecommendationService());
+            }
+            finalListener.onResponse(response);
         }
     }
 
@@ -152,9 +163,17 @@ public class TransportTopQueriesAction extends TransportNodesAction<
                 combinedTopQueriesList.add(new TopQueries(clusterService.localNode(), deduplicatedHistoricalRecords));
             }
         }
-        finalListener.onResponse(
-            new TopQueriesResponse(clusterService.getClusterName(), combinedTopQueriesList, inMemoryDataFailures, request.getMetricType())
+        TopQueriesResponse response = new TopQueriesResponse(
+            clusterService.getClusterName(),
+            combinedTopQueriesList,
+            inMemoryDataFailures,
+            request.getMetricType()
         );
+        // Set recommendation context if requested (hydration happens during serialization)
+        if (Boolean.TRUE.equals(request.getRecommendations())) {
+            response.setRecommendationContext(queryInsightsService.getRecommendationService());
+        }
+        finalListener.onResponse(response);
     }
 
     void onHistoricalDataFailure(
@@ -165,9 +184,17 @@ public class TransportTopQueriesAction extends TransportNodesAction<
         ActionListener<TopQueriesResponse> finalListener
     ) {
         logger.warn("Failed to fetch historical top queries, proceeding with in-memory data only.", e);
-        finalListener.onResponse(
-            new TopQueriesResponse(clusterService.getClusterName(), inMemoryTopQueries, inMemoryDataFailures, request.getMetricType())
+        TopQueriesResponse response = new TopQueriesResponse(
+            clusterService.getClusterName(),
+            inMemoryTopQueries,
+            inMemoryDataFailures,
+            request.getMetricType()
         );
+        // Set recommendation context if requested (hydration happens during serialization)
+        if (Boolean.TRUE.equals(request.getRecommendations())) {
+            response.setRecommendationContext(queryInsightsService.getRecommendationService());
+        }
+        finalListener.onResponse(response);
     }
 
     /**

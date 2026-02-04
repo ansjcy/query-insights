@@ -93,6 +93,9 @@
     "source_truncated" : {
       "type" : "boolean"
     },
+    "recommendations" : {
+      "type" : "keyword"
+    },
     "task_resource_usages" : {
       "properties" : {
         "action" : {

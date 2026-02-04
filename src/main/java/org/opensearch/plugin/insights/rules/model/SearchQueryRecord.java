@@ -132,6 +132,10 @@ public class SearchQueryRecord implements ToXContentObject, Writeable {
      */
     public static final String SOURCE_TRUNCATED = "source_truncated";
     /**
+     * Query recommendations (stored as hashes)
+     */
+    public static final String RECOMMENDATIONS = "recommendations";
+    /**
      * Default, immutable `top_n_query` map. All values initialized to {@code false}
      */
     public static final Map<String, Boolean> DEFAULT_TOP_N_QUERY_MAP = Collections.unmodifiableMap(
@@ -402,6 +406,14 @@ public class SearchQueryRecord implements ToXContentObject, Writeable {
                         }
                         attributes.put(Attribute.TOP_N_QUERY, metricTypeMap);
                         break;
+                    case RECOMMENDATIONS:
+                        XContentParserUtils.ensureExpectedToken(XContentParser.Token.START_ARRAY, parser.currentToken(), parser);
+                        List<String> recommendationHashes = new ArrayList<>();
+                        while (parser.nextToken() != XContentParser.Token.END_ARRAY) {
+                            recommendationHashes.add(parser.text());
+                        }
+                        attributes.put(Attribute.RECOMMENDATIONS, recommendationHashes);
+                        break;
                     default:
                         break;
                 }
@@ -558,7 +570,66 @@ public class SearchQueryRecord implements ToXContentObject, Writeable {
             if (entry.getKey() == Attribute.TOP_N_QUERY) { // Always skip TOP_N_QUERY attribute
                 continue;
             }
+            // RECOMMENDATIONS are always stored as List<String> hashes
+            // For hydrated display, use toXContentWithRecommendations() instead
             builder.field(entry.getKey().toString(), entry.getValue());
+        }
+        builder.startObject(MEASUREMENTS);
+        for (Map.Entry<MetricType, Measurement> entry : measurements.entrySet()) {
+            builder.field(entry.getKey().toString());  // MetricType as field name
+            entry.getValue().toXContent(builder, params);  // Serialize Measurement object
+        }
+        builder.endObject();
+        return builder.endObject();
+    }
+
+    /**
+     * Serializes this object with recommendations hydrated from hashes to full objects.
+     * This method is used for API responses when recommendations are requested.
+     *
+     * @param builder The {@link XContentBuilder} to serialize into.
+     * @param params  Optional serialization parameters.
+     * @param recommendationService The service to hydrate recommendation hashes
+     * @return The updated {@link XContentBuilder} with this object's content and hydrated recommendations.
+     * @throws IOException if an I/O error occurs during serialization.
+     */
+    public XContentBuilder toXContentWithRecommendations(
+        final XContentBuilder builder,
+        final Params params,
+        final org.opensearch.plugin.insights.core.service.recommendations.RecommendationService recommendationService
+    ) throws IOException {
+        builder.startObject();
+        builder.field("timestamp", timestamp);
+        builder.field("id", id);
+
+        for (Map.Entry<Attribute, Object> entry : attributes.entrySet()) {
+            if (entry.getKey() == Attribute.TOP_N_QUERY) { // Always skip TOP_N_QUERY attribute
+                continue;
+            }
+
+            // Special handling for RECOMMENDATIONS: hydrate hashes to full objects
+            if (entry.getKey() == Attribute.RECOMMENDATIONS && entry.getValue() instanceof List) {
+                @SuppressWarnings("unchecked")
+                List<String> hashes = (List<String>) entry.getValue();
+                if (hashes != null && !hashes.isEmpty() && recommendationService != null) {
+                    List<org.opensearch.plugin.insights.rules.model.recommendations.Recommendation> fullRecommendations =
+                        recommendationService.getRecommendationsByHashes(hashes);
+                    if (!fullRecommendations.isEmpty()) {
+                        builder.startArray(entry.getKey().toString());
+                        for (org.opensearch.plugin.insights.rules.model.recommendations.Recommendation rec : fullRecommendations) {
+                            rec.toXContent(builder, params);
+                        }
+                        builder.endArray();
+                    } else {
+                        // No recommendations found, output empty array
+                        builder.field(entry.getKey().toString(), hashes);
+                    }
+                } else {
+                    builder.field(entry.getKey().toString(), entry.getValue());
+                }
+            } else {
+                builder.field(entry.getKey().toString(), entry.getValue());
+            }
         }
         builder.startObject(MEASUREMENTS);
         for (Map.Entry<MetricType, Measurement> entry : measurements.entrySet()) {
@@ -607,6 +678,7 @@ public class SearchQueryRecord implements ToXContentObject, Writeable {
             if (entry.getKey() == Attribute.SOURCE && useObjectSource) {
                 builder.field(entry.getKey().toString(), searchSourceBuilder);
             } else {
+                // RECOMMENDATIONS are always stored as List<String> hashes
                 builder.field(entry.getKey().toString(), entry.getValue());
             }
         }

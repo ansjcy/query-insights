@@ -129,10 +129,14 @@ public class QueryInsightsServiceTests extends OpenSearchTestCase {
         when(client.admin()).thenReturn(adminClient);
         when(adminClient.indices()).thenReturn(indicesAdminClient);
         when(adminClient.cluster()).thenReturn(clusterAdminClient);
-        mockLocalIndexLifecycleManagerSpy = spy(
-            new LocalIndexLifecycleManager(threadPool, client, QueryInsightsSettings.DEFAULT_DELETE_AFTER_VALUE)
-        );
         clusterService = new ClusterService(settings, clusterSettings, threadPool);
+        // Create a mock RecommendationService for the lifecycle manager
+        org.opensearch.plugin.insights.core.service.recommendations.RecommendationService mockRecommendationService = mock(
+            org.opensearch.plugin.insights.core.service.recommendations.RecommendationService.class
+        );
+        mockLocalIndexLifecycleManagerSpy = spy(
+            new LocalIndexLifecycleManager(threadPool, client, QueryInsightsSettings.DEFAULT_DELETE_AFTER_VALUE, mockRecommendationService)
+        );
         queryInsightsService = new QueryInsightsService(
             clusterService,
             threadPool,

@@ -127,6 +127,11 @@ public class QueryInsightsService extends AbstractLifecycleComponent {
      */
     private QueryShapeGenerator queryShapeGenerator;
 
+    /**
+     * Recommendation service for generating query recommendations
+     */
+    private final org.opensearch.plugin.insights.core.service.recommendations.RecommendationService recommendationService;
+
     private LocalIndexLifecycleManager localIndexLifecycleManager;
 
     SinkType sinkType;
@@ -172,10 +177,24 @@ public class QueryInsightsService extends AbstractLifecycleComponent {
                 (v -> setExporterAndReaderType(SinkType.parse(v))),
                 (this::validateExporterType)
             );
+
+        // Initialize recommendation service first (needed by LocalIndexLifecycleManager for GC)
+        this.recommendationService = new org.opensearch.plugin.insights.core.service.recommendations.RecommendationService(
+            clusterService,
+            client
+        );
+
+        // Set recommendation service reference in all TopQueriesService instances for window rotation export
+        for (TopQueriesService topQueriesService : topQueriesServices.values()) {
+            topQueriesService.setRecommendationService(this.recommendationService);
+        }
+
+        // Initialize lifecycle manager with recommendation service
         this.localIndexLifecycleManager = new LocalIndexLifecycleManager(
             threadPool,
             client,
-            clusterService.getClusterSettings().get(TOP_N_EXPORTER_DELETE_AFTER)
+            clusterService.getClusterSettings().get(TOP_N_EXPORTER_DELETE_AFTER),
+            this.recommendationService
         );
         clusterService.getClusterSettings()
             .addSettingsUpdateConsumer(
@@ -251,6 +270,17 @@ public class QueryInsightsService extends AbstractLifecycleComponent {
                 OperationalMetricsCounter.getInstance().incrementCounter(OperationalMetric.QUERY_CATEGORIZE_EXCEPTIONS);
                 logger.error("Error while trying to categorize the queries.", e);
             }
+        }
+
+        // Generate recommendations asynchronously if enabled
+        if (recommendationService.isEnabled() && !records.isEmpty()) {
+            threadPool.executor(QUERY_INSIGHTS_EXECUTOR).execute(() -> {
+                try {
+                    recommendationService.analyzeQueries(records);
+                } catch (Exception e) {
+                    logger.error("Error generating recommendations", e);
+                }
+            });
         }
     }
 
@@ -339,6 +369,14 @@ public class QueryInsightsService extends AbstractLifecycleComponent {
 
     public GroupingType getGrouping() {
         return groupingType;
+    }
+
+    /**
+     * Get the recommendation service
+     * @return the recommendation service
+     */
+    public org.opensearch.plugin.insights.core.service.recommendations.RecommendationService getRecommendationService() {
+        return recommendationService;
     }
 
     /**

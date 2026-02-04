@@ -136,6 +136,11 @@ public class TopQueriesService {
 
     private int maxSourceLength;
 
+    /**
+     * Reference to recommendation service for exporting recommendations on window rotation
+     */
+    private org.opensearch.plugin.insights.core.service.recommendations.RecommendationService recommendationService;
+
     TopQueriesService(
         final Client client,
         final MetricType metricType,
@@ -183,6 +188,16 @@ public class TopQueriesService {
     public void setMaxSourceLength(final int maxSourceLength) {
         this.maxSourceLength = maxSourceLength;
         this.queryGrouper.setMaxSourceLength(maxSourceLength);
+    }
+
+    /**
+     * Set the recommendation service reference for exporting recommendations on window rotation
+     * @param recommendationService the recommendation service
+     */
+    public void setRecommendationService(
+        final org.opensearch.plugin.insights.core.service.recommendations.RecommendationService recommendationService
+    ) {
+        this.recommendationService = recommendationService;
     }
 
     /**
@@ -524,6 +539,11 @@ public class TopQueriesService {
             QueryInsightsExporter exporter = queryInsightsExporterFactory.getExporter(TOP_QUERIES_EXPORTER_ID);
             if (exporter != null) {
                 threadPool.executor(QUERY_INSIGHTS_EXECUTOR).execute(() -> exporter.export(history));
+            }
+
+            // export recommendations to query_recommendations index
+            if (recommendationService != null) {
+                threadPool.executor(QUERY_INSIGHTS_EXECUTOR).execute(() -> recommendationService.exportRecommendations());
             }
         }
     }

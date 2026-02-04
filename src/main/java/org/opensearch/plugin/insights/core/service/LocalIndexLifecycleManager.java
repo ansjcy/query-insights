@@ -28,6 +28,7 @@ import org.opensearch.core.action.ActionListener;
 import org.opensearch.index.IndexNotFoundException;
 import org.opensearch.plugin.insights.core.metrics.OperationalMetric;
 import org.opensearch.plugin.insights.core.metrics.OperationalMetricsCounter;
+import org.opensearch.plugin.insights.core.service.recommendations.RecommendationService;
 import org.opensearch.plugin.insights.core.utils.IndexDiscoveryHelper;
 import org.opensearch.plugin.insights.settings.QueryInsightsSettings;
 import org.opensearch.threadpool.ThreadPool;
@@ -40,6 +41,7 @@ import org.opensearch.transport.client.Client;
 class LocalIndexLifecycleManager {
     private final ThreadPool threadPool;
     private final Client client;
+    private final RecommendationService recommendationService;
     private int deleteAfter;
 
     private static final Logger logger = LogManager.getLogger(LocalIndexLifecycleManager.class);
@@ -49,10 +51,18 @@ class LocalIndexLifecycleManager {
      *
      * @param threadPool The OpenSearch thread pool to run async tasks
      * @param client OS client
+     * @param deleteAfter the number of days after which Top N local indices should be deleted
+     * @param recommendationService recommendation service for GC
      */
-    LocalIndexLifecycleManager(final ThreadPool threadPool, final Client client, final int deleteAfter) {
+    LocalIndexLifecycleManager(
+        final ThreadPool threadPool,
+        final Client client,
+        final int deleteAfter,
+        final RecommendationService recommendationService
+    ) {
         this.threadPool = threadPool;
         this.client = client;
+        this.recommendationService = recommendationService;
         setDeleteAfter(deleteAfter);
     }
 
@@ -132,6 +142,10 @@ class LocalIndexLifecycleManager {
                         deleteSingleIndex(indexName, client);
                     }
                 }
+
+                // Also delete expired recommendations based on same retention policy
+                logger.info("Triggering recommendation retention cleanup with deleteAfter={} days", getDeleteAfter());
+                recommendationService.deleteExpiredRecommendations(getDeleteAfter());
             }, exception -> { logger.error("Error while deleting expired top_queries-* indices: ", exception); }));
         });
     }
@@ -143,16 +157,18 @@ class LocalIndexLifecycleManager {
      * @param client    The OpenSearch client used to perform the deletion.
      */
     void deleteSingleIndex(String indexName, Client client) {
+        logger.info("deleteSingleIndex called for index [{}]", indexName);
         client.admin().indices().delete(new DeleteIndexRequest(indexName), new ActionListener<>() {
             @Override
             public void onResponse(AcknowledgedResponse acknowledgedResponse) {
-                logger.info("Deleted Query Insights index [{}]", indexName);
+                logger.info("Deleted Query Insights index [{}], acknowledged: {}", indexName, acknowledgedResponse.isAcknowledged());
             }
 
             @Override
             public void onFailure(Exception e) {
                 Throwable cause = ExceptionsHelper.unwrapCause(e);
                 if (cause instanceof IndexNotFoundException) {
+                    logger.info("Index [{}] not found during deletion (already deleted)", indexName);
                     return;
                 }
                 OperationalMetricsCounter.getInstance().incrementCounter(OperationalMetric.LOCAL_INDEX_EXPORTER_DELETE_FAILURES);
@@ -160,6 +176,7 @@ class LocalIndexLifecycleManager {
             }
         });
     }
+
 
     /**
      * Deletes all Top N local indices
@@ -175,6 +192,10 @@ class LocalIndexLifecycleManager {
                 .stream()
                 .filter(entry -> isTopQueriesIndex(entry.getKey(), entry.getValue()))
                 .forEach(entry -> deleteSingleIndex(entry.getKey(), client));
+
+            // Also delete all recommendations when deleteAfter=0
+            logger.info("Triggering deletion of all recommendations (deleteAfter=0)");
+            recommendationService.deleteExpiredRecommendations(0);
         }, exception -> { logger.error("Error while deleting Query Insights local indices: ", exception); }));
     }
 }

@@ -1,0 +1,97 @@
+{
+  "dynamic": false,
+  "_meta": {
+    "schema_version": 1,
+    "query_insights_feature_space": "recommendations"
+  },
+  "properties": {
+    "rec_hash": {
+      "type": "keyword"
+    },
+    "rule_id": {
+      "type": "keyword"
+    },
+    "recommendation": {
+      "properties": {
+        "id": {
+          "type": "keyword"
+        },
+        "ruleId": {
+          "type": "keyword"
+        },
+        "title": {
+          "type": "text",
+          "fields": {
+            "keyword": {
+              "type": "keyword",
+              "ignore_above": 256
+            }
+          }
+        },
+        "description": {
+          "type": "text"
+        },
+        "type": {
+          "type": "keyword"
+        },
+        "action": {
+          "properties": {
+            "type": {
+              "type": "keyword"
+            },
+            "hint": {
+              "type": "text"
+            },
+            "documentation": {
+              "type": "keyword"
+            },
+            "codeExample": {
+              "type": "text",
+              "index": false
+            }
+          }
+        },
+        "impact": {
+          "properties": {
+            "latency": {
+              "type": "keyword"
+            },
+            "cpu": {
+              "type": "keyword"
+            },
+            "memory": {
+              "type": "keyword"
+            },
+            "correctness": {
+              "type": "keyword"
+            },
+            "confidence": {
+              "type": "double"
+            },
+            "estimatedImprovement": {
+              "type": "text"
+            }
+          }
+        },
+        "confidence": {
+          "type": "double"
+        },
+        "metadata": {
+          "type": "object",
+          "enabled": true
+        }
+      }
+    },
+    "first_seen": {
+      "type": "date",
+      "format": "epoch_millis"
+    },
+    "last_seen": {
+      "type": "date",
+      "format": "epoch_millis"
+    },
+    "reference_count": {
+      "type": "long"
+    }
+  }
+}
