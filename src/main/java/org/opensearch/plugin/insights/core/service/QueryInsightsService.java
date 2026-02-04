@@ -127,6 +127,11 @@ public class QueryInsightsService extends AbstractLifecycleComponent {
      */
     private QueryShapeGenerator queryShapeGenerator;
 
+    /**
+     * Recommendation service for generating query recommendations
+     */
+    private final org.opensearch.plugin.insights.core.service.recommendations.RecommendationService recommendationService;
+
     private LocalIndexLifecycleManager localIndexLifecycleManager;
 
     SinkType sinkType;
@@ -172,6 +177,14 @@ public class QueryInsightsService extends AbstractLifecycleComponent {
                 (v -> setExporterAndReaderType(SinkType.parse(v))),
                 (this::validateExporterType)
             );
+
+        // Initialize recommendation service
+        this.recommendationService = new org.opensearch.plugin.insights.core.service.recommendations.RecommendationService(
+            clusterService,
+            namedXContentRegistry
+        );
+
+        // Initialize lifecycle manager
         this.localIndexLifecycleManager = new LocalIndexLifecycleManager(
             threadPool,
             client,
@@ -339,6 +352,14 @@ public class QueryInsightsService extends AbstractLifecycleComponent {
 
     public GroupingType getGrouping() {
         return groupingType;
+    }
+
+    /**
+     * Get the recommendation service
+     * @return the recommendation service
+     */
+    public org.opensearch.plugin.insights.core.service.recommendations.RecommendationService getRecommendationService() {
+        return recommendationService;
     }
 
     /**

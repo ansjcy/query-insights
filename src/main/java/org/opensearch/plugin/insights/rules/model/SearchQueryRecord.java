@@ -570,6 +570,50 @@ public class SearchQueryRecord implements ToXContentObject, Writeable {
     }
 
     /**
+     * Serializes this object with recommendations appended.
+     * This method is used for API responses when recommendations are requested.
+     *
+     * @param builder The {@link XContentBuilder} to serialize into.
+     * @param params  Optional serialization parameters.
+     * @param recommendations The list of recommendations to include
+     * @return The updated {@link XContentBuilder} with this object's content and recommendations.
+     * @throws IOException if an I/O error occurs during serialization.
+     */
+    public XContentBuilder toXContentWithRecommendations(
+        final XContentBuilder builder,
+        final Params params,
+        final java.util.List<org.opensearch.plugin.insights.rules.model.recommendations.Recommendation> recommendations
+    ) throws IOException {
+        builder.startObject();
+        builder.field("timestamp", timestamp);
+        builder.field("id", id);
+
+        for (Map.Entry<Attribute, Object> entry : attributes.entrySet()) {
+            if (entry.getKey() == Attribute.TOP_N_QUERY) { // Always skip TOP_N_QUERY attribute
+                continue;
+            }
+            builder.field(entry.getKey().toString(), entry.getValue());
+        }
+        builder.startObject(MEASUREMENTS);
+        for (Map.Entry<MetricType, Measurement> entry : measurements.entrySet()) {
+            builder.field(entry.getKey().toString());  // MetricType as field name
+            entry.getValue().toXContent(builder, params);  // Serialize Measurement object
+        }
+        builder.endObject();
+
+        // Append recommendations array
+        if (recommendations != null && !recommendations.isEmpty()) {
+            builder.startArray("recommendations");
+            for (org.opensearch.plugin.insights.rules.model.recommendations.Recommendation rec : recommendations) {
+                rec.toXContent(builder, params);
+            }
+            builder.endArray();
+        }
+
+        return builder.endObject();
+    }
+
+    /**
      * Serializes this object into an {@link XContentBuilder} for external export (e.g. backup or reporting).
      * <p>
      * Unlike {@link #toXContent}, this method includes all attributes, including {@code Attribute.TOP_N_QUERY}.

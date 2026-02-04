@@ -446,6 +446,11 @@ final public class QueryInsightsTestUtils {
         clusterSettings.registerSetting(QueryInsightsSettings.TOP_N_QUERIES_EXCLUDED_INDICES);
         clusterSettings.registerSetting(QueryInsightsSettings.TOP_N_QUERIES_MAX_SOURCE_LENGTH);
         clusterSettings.registerSetting(QueryCategorizationSettings.SEARCH_QUERY_METRICS_ENABLED_SETTING);
+        // Recommendation settings
+        clusterSettings.registerSetting(QueryInsightsSettings.RECOMMENDATIONS_ENABLED);
+        clusterSettings.registerSetting(QueryInsightsSettings.RECOMMENDATIONS_MIN_CONFIDENCE);
+        clusterSettings.registerSetting(QueryInsightsSettings.RECOMMENDATIONS_MAX_COUNT);
+        clusterSettings.registerSetting(QueryInsightsSettings.RECOMMENDATIONS_ENABLED_RULES);
     }
 
     /**

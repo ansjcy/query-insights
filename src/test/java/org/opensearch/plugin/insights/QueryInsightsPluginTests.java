@@ -110,7 +110,12 @@ public class QueryInsightsPluginTests extends OpenSearchTestCase {
                 QueryInsightsSettings.TOP_N_EXPORTER_TYPE,
                 QueryInsightsSettings.TOP_N_QUERIES_EXCLUDED_INDICES,
                 QueryInsightsSettings.TOP_N_QUERIES_MAX_SOURCE_LENGTH,
-                QueryCategorizationSettings.SEARCH_QUERY_FIELD_TYPE_CACHE_SIZE_KEY
+                QueryCategorizationSettings.SEARCH_QUERY_FIELD_TYPE_CACHE_SIZE_KEY,
+                // Recommendation settings
+                QueryInsightsSettings.RECOMMENDATIONS_ENABLED,
+                QueryInsightsSettings.RECOMMENDATIONS_MIN_CONFIDENCE,
+                QueryInsightsSettings.RECOMMENDATIONS_MAX_COUNT,
+                QueryInsightsSettings.RECOMMENDATIONS_ENABLED_RULES
             ),
             queryInsightsPlugin.getSettings()
         );
@@ -147,22 +152,24 @@ public class QueryInsightsPluginTests extends OpenSearchTestCase {
 
     public void testGetRestHandlers() {
         List<RestHandler> components = queryInsightsPlugin.getRestHandlers(Settings.EMPTY, null, null, null, null, null, null);
-        assertEquals(5, components.size());
+        assertEquals(6, components.size());
         assertTrue(components.get(0) instanceof RestTopQueriesAction);
         assertTrue(components.get(1) instanceof RestHealthStatsAction);
         assertTrue(components.get(2) instanceof RestLiveQueriesAction);
         assertTrue(components.get(3) instanceof RestGetQueryInsightsSettingsAction);
         assertTrue(components.get(4) instanceof RestUpdateQueryInsightsSettingsAction);
+        assertTrue(components.get(5) instanceof org.opensearch.plugin.insights.rules.resthandler.recommendations.RestAnalyzeQueryAction);
     }
 
     public void testGetActions() {
         List<ActionPlugin.ActionHandler<? extends ActionRequest, ? extends ActionResponse>> components = queryInsightsPlugin.getActions();
-        assertEquals(5, components.size());
+        assertEquals(6, components.size());
         assertTrue(components.get(0).getAction() instanceof TopQueriesAction);
         assertTrue(components.get(1).getAction() instanceof HealthStatsAction);
         assertTrue(components.get(2).getAction() instanceof LiveQueriesAction);
         assertTrue(components.get(3).getAction() instanceof GetQueryInsightsSettingsAction);
         assertTrue(components.get(4).getAction() instanceof UpdateQueryInsightsSettingsAction);
+        assertTrue(components.get(5).getAction() instanceof org.opensearch.plugin.insights.rules.action.recommendations.AnalyzeQueryAction);
     }
 
     public void testLiveQueriesActionRegistration() {

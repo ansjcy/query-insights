@@ -49,6 +49,7 @@ class LocalIndexLifecycleManager {
      *
      * @param threadPool The OpenSearch thread pool to run async tasks
      * @param client OS client
+     * @param deleteAfter the number of days after which Top N local indices should be deleted
      */
     LocalIndexLifecycleManager(final ThreadPool threadPool, final Client client, final int deleteAfter) {
         this.threadPool = threadPool;
@@ -143,16 +144,18 @@ class LocalIndexLifecycleManager {
      * @param client    The OpenSearch client used to perform the deletion.
      */
     void deleteSingleIndex(String indexName, Client client) {
+        logger.info("deleteSingleIndex called for index [{}]", indexName);
         client.admin().indices().delete(new DeleteIndexRequest(indexName), new ActionListener<>() {
             @Override
             public void onResponse(AcknowledgedResponse acknowledgedResponse) {
-                logger.info("Deleted Query Insights index [{}]", indexName);
+                logger.info("Deleted Query Insights index [{}], acknowledged: {}", indexName, acknowledgedResponse.isAcknowledged());
             }
 
             @Override
             public void onFailure(Exception e) {
                 Throwable cause = ExceptionsHelper.unwrapCause(e);
                 if (cause instanceof IndexNotFoundException) {
+                    logger.info("Index [{}] not found during deletion (already deleted)", indexName);
                     return;
                 }
                 OperationalMetricsCounter.getInstance().incrementCounter(OperationalMetric.LOCAL_INDEX_EXPORTER_DELETE_FAILURES);
