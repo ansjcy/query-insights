@@ -46,6 +46,7 @@ import org.opensearch.common.settings.Settings;
 import org.opensearch.common.unit.TimeValue;
 import org.opensearch.core.tasks.resourcetracker.TaskResourceInfo;
 import org.opensearch.core.tasks.resourcetracker.TaskResourceUsage;
+import org.opensearch.env.Environment;
 import org.opensearch.monitor.fs.FsInfo;
 import org.opensearch.monitor.jvm.JvmStats;
 import org.opensearch.monitor.os.OsStats;
@@ -65,7 +66,7 @@ import org.opensearch.search.sort.SortBuilder;
  */
 public class FeatureEmbeddingGenerator {
     private static final Logger log = LogManager.getLogger(FeatureEmbeddingGenerator.class);
-    
+
     // Feature embedding export settings
     private final boolean featureEmbeddingEnabled;
     private final String outputDirectory;
@@ -75,7 +76,7 @@ public class FeatureEmbeddingGenerator {
     private final ClusterService clusterService;
     private final Client client;
     private final QueryShapeGenerator queryShapeGenerator;
-    
+
     // Feature header constants
     private static final String TIMESTAMP_MS = "timestamp_ms";
     private static final String QUERY_HASHCODE = "query_hashcode";
@@ -161,20 +162,20 @@ public class FeatureEmbeddingGenerator {
      * @param client The client for OpenSearch operations
      * @param queryShapeGenerator The generator for query shapes
      */
-    public FeatureEmbeddingGenerator(Settings settings, ClusterService clusterService, Client client, QueryShapeGenerator queryShapeGenerator) {
+    public FeatureEmbeddingGenerator(Settings settings, ClusterService clusterService, Client client, QueryShapeGenerator queryShapeGenerator, Environment env) {
         this.clusterService = clusterService;
         this.client = client;
         this.queryShapeGenerator = queryShapeGenerator;
-        
+
         // Load configuration from settings
-        this.featureEmbeddingEnabled = settings.getAsBoolean("search.insights.feature_embedding.enabled", false);
-        this.outputDirectory = settings.get("search.insights.feature_embedding.output_directory", System.getProperty("java.io.tmpdir"));
+        this.featureEmbeddingEnabled = settings.getAsBoolean("search.insights.feature_embedding.enabled", true);
+        this.outputDirectory = settings.get("search.insights.feature_embedding.output_directory", env.tmpDir().toString());
         this.filePrefix = settings.get("search.insights.feature_embedding.file_prefix", "query_features");
         this.exportInterval = settings.getAsTime(
-            "search.insights.feature_embedding.export_interval", 
-            TimeValue.timeValueMinutes(5)
+            "search.insights.feature_embedding.export_interval",
+            TimeValue.timeValueSeconds(10)
         );
-        
+
         // Parse the features to include, default to all
         String featuresToIncludeString = settings.get("search.insights.feature_embedding.features_to_include", "all");
         if ("all".equalsIgnoreCase(featuresToIncludeString)) {
@@ -182,7 +183,7 @@ public class FeatureEmbeddingGenerator {
         } else {
             this.featuresToInclude = Arrays.asList(featuresToIncludeString.split(","));
         }
-        
+
         // Ensure output directory exists
         try {
             Path dirPath = Paths.get(outputDirectory);
@@ -245,14 +246,14 @@ public class FeatureEmbeddingGenerator {
         if (!featureEmbeddingEnabled) {
             return Collections.emptyMap();
         }
-        
+
         try {
             SearchRequest request = context.getRequest();
             Map<String, Object> featureVector = new HashMap<>();
-            
+
             // Extract basic query attributes
             featureVector.put(TIMESTAMP_MS, request.getOrCreateAbsoluteStartMillis());
-            
+
             // Generate query hash code for identifying similar queries
             if (request.source() != null) {
                 String queryShape = queryShapeGenerator.buildShape(
@@ -266,52 +267,52 @@ public class FeatureEmbeddingGenerator {
             } else {
                 featureVector.put(QUERY_HASHCODE, "null");
             }
-            
+
             // Extract indices information
             String[] indices = request.indices();
             featureVector.put(INDICES_COUNT, indices != null ? indices.length : 0);
             featureVector.put(TOTAL_SHARDS, context.getNumShards());
-            
+
             // Extract search type
             featureVector.put(SEARCH_TYPE, request.searchType().toString().toLowerCase(Locale.ROOT));
-            
+
             // Extract query source details
             SearchSourceBuilder source = request.source();
             if (source != null) {
                 // Aggregations
-                List<AggregationBuilder> aggregations = source.aggregations() != null ? 
-                    new ArrayList<>(source.aggregations().getAggregatorFactories()) : 
+                List<AggregationBuilder> aggregations = source.aggregations() != null ?
+                    new ArrayList<>(source.aggregations().getAggregatorFactories()) :
                     Collections.emptyList();
                 featureVector.put(HAS_AGGREGATIONS, !aggregations.isEmpty() ? 1 : 0);
                 featureVector.put(AGGREGATIONS_COUNT, aggregations.size());
-                
+
                 // Sort
                 List<SortBuilder<?>> sorts = source.sorts() != null ? source.sorts() : Collections.emptyList();
                 featureVector.put(HAS_SORT, !sorts.isEmpty() ? 1 : 0);
                 featureVector.put(SORT_COUNT, sorts.size());
-                
+
                 // Source filtering
-                boolean hasSourceFiltering = source.fetchSource() != null && 
+                boolean hasSourceFiltering = source.fetchSource() != null &&
                     (source.fetchSource().includes() != null || source.fetchSource().excludes() != null);
                 featureVector.put(HAS_SOURCE_FILTERING, hasSourceFiltering ? 1 : 0);
-                
+
                 if (hasSourceFiltering && source.fetchSource().includes() != null) {
                     featureVector.put(SOURCE_INCLUDES_COUNT, source.fetchSource().includes().length);
                 } else {
                     featureVector.put(SOURCE_INCLUDES_COUNT, 0);
                 }
-                
+
                 if (hasSourceFiltering && source.fetchSource().excludes() != null) {
                     featureVector.put(SOURCE_EXCLUDES_COUNT, source.fetchSource().excludes().length);
                 } else {
                     featureVector.put(SOURCE_EXCLUDES_COUNT, 0);
                 }
-                
+
                 // Query
                 featureVector.put(HAS_QUERY, source.query() != null ? 1 : 0);
                 featureVector.put(QUERY_TYPE, source.query() != null ? source.query().getName() : "none");
                 featureVector.put(QUERY_DEPTH, source.query() != null ? calculateQueryDepth(source.query().toString()) : 0);
-                
+
                 // Size and From
                 featureVector.put(HAS_SIZE, source.size() != -1 ? 1 : 0);
                 featureVector.put(SIZE_VALUE, source.size() != -1 ? source.size() : 10);  // Default OpenSearch size is 10
@@ -334,7 +335,7 @@ public class FeatureEmbeddingGenerator {
                 featureVector.put(HAS_FROM, 0);
                 featureVector.put(FROM_VALUE, 0);
             }
-            
+
             // Fetch cluster and index stats asynchronously to avoid blocking
             try {
                 // Cluster health information
@@ -342,16 +343,16 @@ public class FeatureEmbeddingGenerator {
                     .cluster()
                     .prepareHealth()
                     .get();
-                
+
                 featureVector.put(ACTIVE_NODES_COUNT, clusterHealthResponse.getNumberOfNodes());
                 featureVector.put(CLUSTER_STATUS, clusterHealthResponse.getStatus().toString());
-                
+
                 if (indices != null && indices.length > 0) {
                     // Get health status for the indices used in the query
                     Map<String, ClusterIndexHealth> indexHealthMap = clusterHealthResponse.getIndices();
                     double avgStatus = 0.0;
                     int count = 0;
-                    
+
                     for (String index : indices) {
                         ClusterIndexHealth indexHealth = indexHealthMap.get(index);
                         if (indexHealth != null) {
@@ -361,43 +362,43 @@ public class FeatureEmbeddingGenerator {
                             count++;
                         }
                     }
-                    
+
                     if (count > 0) {
                         avgStatus /= count;
                     }
-                    
+
                     featureVector.put(INDICES_STATUS, avgStatus);
                 } else {
                     featureVector.put(INDICES_STATUS, -1);
                 }
-                
+
                 // Node stats information
                 NodesStatsResponse nodesStats = client.admin()
                     .cluster()
                     .prepareNodesStats()
                     .all()
                     .get();
-                
+
                 double avgCpuUtilization = 0.0;
                 double avgJvmHeapUsedPercent = 0.0;
                 double avgDiskUsedPercent = 0.0;
                 int nodeCount = 0;
-                
+
                 for (NodeStats nodeStats : nodesStats.getNodes()) {
                     nodeCount++;
-                    
+
                     // CPU utilization
                     OsStats osStats = nodeStats.getOs();
                     if (osStats != null && osStats.getCpu() != null) {
                         avgCpuUtilization += osStats.getCpu().getPercent();
                     }
-                    
+
                     // JVM heap usage
                     JvmStats jvmStats = nodeStats.getJvm();
                     if (jvmStats != null) {
                         avgJvmHeapUsedPercent += jvmStats.getMem().getHeapUsedPercent();
                     }
-                    
+
                     // Disk usage
                     FsInfo fsInfo = nodeStats.getFs();
                     if (fsInfo != null && fsInfo.getTotal() != null) {
@@ -409,7 +410,7 @@ public class FeatureEmbeddingGenerator {
                         }
                     }
                 }
-                
+
                 if (nodeCount > 0) {
                     featureVector.put(AVG_CPU_UTILIZATION, avgCpuUtilization / nodeCount);
                     featureVector.put(AVG_JVM_HEAP_USED_PERCENT, avgJvmHeapUsedPercent / nodeCount);
@@ -419,19 +420,19 @@ public class FeatureEmbeddingGenerator {
                     featureVector.put(AVG_JVM_HEAP_USED_PERCENT, -1);
                     featureVector.put(AVG_DISK_USED_PERCENT, -1);
                 }
-                
+
                 // Index stats
                 if (indices != null && indices.length > 0) {
                     IndicesStatsResponse indicesStats = client.admin()
                         .indices()
                         .prepareStats(indices)
                         .get();
-                    
+
                     long totalDocs = 0;
                     long maxDocs = 0;
                     long totalSizeBytes = 0;
                     int indexCount = 0;
-                    
+
                     for (String index : indices) {
                         if (indicesStats.getIndex(index) != null) {
                             indexCount++;
@@ -441,7 +442,7 @@ public class FeatureEmbeddingGenerator {
                             totalSizeBytes += indicesStats.getIndex(index).getPrimaries().getStore().getSizeInBytes();
                         }
                     }
-                    
+
                     if (indexCount > 0) {
                         featureVector.put(AVG_DOCS_COUNT, (double) totalDocs / indexCount);
                         featureVector.put(MAX_DOCS_COUNT, maxDocs);
@@ -468,7 +469,7 @@ public class FeatureEmbeddingGenerator {
                 featureVector.put(MAX_DOCS_COUNT, -1);
                 featureVector.put(AVG_INDEX_SIZE_BYTES, -1);
             }
-            
+
             // Add time-based features
             LocalDateTime dateTime = LocalDateTime.ofInstant(
                 Instant.ofEpochMilli(request.getOrCreateAbsoluteStartMillis()),
@@ -476,19 +477,19 @@ public class FeatureEmbeddingGenerator {
             );
             featureVector.put(TIME_OF_DAY_HOUR, dateTime.getHour());
             featureVector.put(DAY_OF_WEEK, dateTime.getDayOfWeek().getValue());
-            
+
             // Add performance metrics (will be set later in the listener)
             featureVector.put(LATENCY_MS, 0L);
             featureVector.put(CPU_NANOS, 0L);
             featureVector.put(MEMORY_BYTES, 0L);
-            
+            log.info("Generated Feature Vector!!");
             return featureVector;
         } catch (Exception e) {
             log.error("Error generating feature vector: {}", e.getMessage());
             return Collections.emptyMap();
         }
     }
-    
+
     /**
      * Updates the performance metrics in the feature vector
      *
@@ -499,13 +500,13 @@ public class FeatureEmbeddingGenerator {
         if (featureVector == null || record == null) {
             return;
         }
-        
+
         // Update the performance metrics in the feature vector
         featureVector.put(LATENCY_MS, record.getMeasurement(MetricType.LATENCY).longValue());
         featureVector.put(CPU_NANOS, record.getMeasurement(MetricType.CPU).longValue());
         featureVector.put(MEMORY_BYTES, record.getMeasurement(MetricType.MEMORY).longValue());
     }
-    
+
     /**
      * Exports the feature vector to the CSV file
      *
@@ -515,21 +516,21 @@ public class FeatureEmbeddingGenerator {
         if (!featureEmbeddingEnabled || featureVector == null || featureVector.isEmpty()) {
             return;
         }
-        
+
         featureVectorsBuffer.add(featureVector);
-        
+
         // Check if it's time to flush to file
         long currentTime = System.currentTimeMillis();
         if (lastExportTime == 0) {
             lastExportTime = currentTime;
         }
-        
+
         if (currentTime - lastExportTime >= exportInterval.getMillis() || featureVectorsBuffer.size() >= 1000) {
             flushToFile();
             lastExportTime = currentTime;
         }
     }
-    
+
     /**
      * Calculates the depth of a query by counting the number of nested levels
      *
@@ -540,10 +541,10 @@ public class FeatureEmbeddingGenerator {
         if (queryString == null || queryString.isEmpty()) {
             return 0;
         }
-        
+
         int maxDepth = 0;
         int currentDepth = 0;
-        
+
         for (char c : queryString.toCharArray()) {
             if (c == '{' || c == '[') {
                 currentDepth++;
@@ -552,10 +553,10 @@ public class FeatureEmbeddingGenerator {
                 currentDepth--;
             }
         }
-        
+
         return maxDepth;
     }
-    
+
     /**
      * Writes the buffered feature vectors to the CSV file
      */
@@ -563,11 +564,11 @@ public class FeatureEmbeddingGenerator {
         if (featureVectorsBuffer.isEmpty()) {
             return;
         }
-        
+
         String filename = generateFilename();
         File outputFile = new File(outputDirectory, filename);
         boolean fileExists = outputFile.exists();
-        
+
         try (BufferedWriter writer = new BufferedWriter(new FileWriter(outputFile, fileExists))) {
             // Write header if file doesn't exist
             if (!fileExists) {
@@ -576,14 +577,14 @@ public class FeatureEmbeddingGenerator {
                 writer.write(headerLine);
                 writer.newLine();
             }
-            
+
             // Write data rows
             for (Map<String, Object> featureVector : featureVectorsBuffer) {
                 List<String> rowValues = new ArrayList<>();
-                
+
                 for (String column : headerColumns) {
                     Object value = featureVector.getOrDefault(column, "");
-                    
+
                     // Format value appropriately for CSV
                     String formattedValue;
                     if (value == null) {
@@ -599,28 +600,28 @@ public class FeatureEmbeddingGenerator {
                     } else {
                         formattedValue = String.valueOf(value);
                     }
-                    
+
                     rowValues.add(formattedValue);
                 }
-                
+
                 writer.write(String.join(",", rowValues));
                 writer.newLine();
             }
-            
+
             log.debug("Wrote {} feature vectors to CSV file: {}", featureVectorsBuffer.size(), outputFile.getAbsolutePath());
             featureVectorsBuffer.clear();
         } catch (IOException e) {
             log.error("Failed to write feature vectors to CSV: {}", e.getMessage());
         }
     }
-    
+
     /**
      * Forces a flush of any buffered feature vectors to the file
      */
     public void forceFlush() {
         flushToFile();
     }
-    
+
     /**
      * Checks if feature embedding generation is enabled
      *
@@ -629,4 +630,4 @@ public class FeatureEmbeddingGenerator {
     public boolean isEnabled() {
         return featureEmbeddingEnabled;
     }
-} 
+}

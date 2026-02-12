@@ -1,0 +1,58 @@
+{
+  "index": "logs-2023.06.01",
+  "body": {
+    "query": {
+      "bool": {
+        "must": [
+          {
+            "match": {
+              "message": "error"
+            }
+          },
+          {
+            "range": {
+              "timestamp": {
+                "gte": "now-1h",
+                "lte": "now"
+              }
+            }
+          }
+        ],
+        "filter": [
+          {
+            "term": {
+              "service": "api"
+            }
+          }
+        ]
+      }
+    },
+    "size": 50,
+    "from": 0,
+    "sort": [
+      {
+        "timestamp": {
+          "order": "desc"
+        }
+      }
+    ],
+    "aggs": {
+      "service_errors": {
+        "terms": {
+          "field": "error_code",
+          "size": 10
+        }
+      },
+      "error_trend": {
+        "date_histogram": {
+          "field": "timestamp",
+          "calendar_interval": "5m"
+        }
+      }
+    },
+    "_source": {
+      "includes": ["timestamp", "message", "error_code", "service", "level"],
+      "excludes": ["raw_data"]
+    }
+  }
+}

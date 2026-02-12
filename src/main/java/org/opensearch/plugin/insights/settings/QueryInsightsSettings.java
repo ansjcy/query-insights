@@ -101,7 +101,7 @@ public class QueryInsightsSettings {
      */
     public static final Setting<Boolean> FEATURE_EMBEDDING_ENABLED = Setting.boolSetting(
         FEATURE_EMBEDDING_PREFIX + ".enabled",
-        false,
+        true,
         Setting.Property.Dynamic,
         Setting.Property.NodeScope
     );
@@ -131,7 +131,7 @@ public class QueryInsightsSettings {
      */
     public static final Setting<TimeValue> FEATURE_EMBEDDING_EXPORT_INTERVAL = Setting.timeSetting(
         FEATURE_EMBEDDING_PREFIX + ".export_interval",
-        TimeValue.timeValueMinutes(5),
+        TimeValue.timeValueSeconds(10),
         TimeValue.timeValueSeconds(1),
         Setting.Property.Dynamic,
         Setting.Property.NodeScope

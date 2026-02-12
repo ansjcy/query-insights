@@ -1,12 +1,12 @@
 {
-  "active_nodes_count": 5,
+  "active_nodes_count": 1,
   "cluster_status": "green",
   "indices_status": 2,
-  "avg_cpu_utilization": 60.5,
-  "avg_jvm_heap_used_percent": 70.2,
-  "avg_disk_used_percent": 45.8,
-  "avg_docs_count": 1500000,
-  "max_docs_count": 2500000,
-  "avg_index_size_bytes": 500000000,
-  "total_shards": 15
-} 
+  "avg_cpu_utilization": 40.5,
+  "avg_jvm_heap_used_percent": 25.2,
+  "avg_disk_used_percent": 75.8,
+  "avg_docs_count": 2,
+  "max_docs_count": 2,
+  "avg_index_size_bytes": 5000,
+  "total_shards": 200
+}

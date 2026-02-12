@@ -8,6 +8,7 @@
 
 package org.opensearch.plugin.insights;
 
+import java.nio.file.Path;
 import java.util.Collection;
 import java.util.List;
 import java.util.function.Supplier;
@@ -92,7 +93,7 @@ public class QueryInsightsPlugin extends Plugin implements ActionPlugin, Telemet
             new QueryInsightsExporterFactory(client, clusterService),
             new QueryInsightsReaderFactory(client)
         );
-        return List.of(queryInsightsService, new QueryInsightsListener(clusterService, queryInsightsService, client));
+        return List.of(queryInsightsService, new QueryInsightsListener(clusterService, queryInsightsService, client, environment));
     }
 
     @Override
