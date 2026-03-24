@@ -80,16 +80,26 @@ public class FinishedQueriesCache {
 
     /**
      * Returns the most recent finished queries.
-     * Schedules the idle-check timer on first API call so the cache auto-deactivates
-     * after idleTimeoutMs of no API access.
-     * Returns an empty list if the cache is disabled (idleTimeoutMs == 0) or inactive.
+     * Re-activates the cache if it was deactivated by the idle timer, making it self-healing:
+     * idle timeout → deactivate → next API call → reactivate.
+     * Schedules the idle-check timer on first API call (or after reactivation) so the cache
+     * auto-deactivates after idleTimeoutMs of no API access.
+     * Returns an empty list if the cache is disabled (idleTimeoutMs == 0).
      *
      * @return list of up to MAX_RETURNED_QUERIES most recent finished query records
      */
     public List<FinishedQueryRecord> getFinishedQueries() {
-        if (idleTimeoutMs == 0 || !active.get()) return List.of();
+        if (idleTimeoutMs == 0) return List.of();
 
-        // Schedule the idle-check task exactly once on first API call.
+        // Update lastAccessTime BEFORE reactivating so the idle-check timer sees the fresh
+        // timestamp and won't immediately deactivate a just-reactivated cache.
+        lastAccessTime = System.currentTimeMillis();
+
+        // Re-activate the cache on API call if it was deactivated by the idle timer.
+        // This makes the cache self-healing: idle timeout → deactivate → next API call → reactivate.
+        active.set(true);
+
+        // Schedule the idle-check task exactly once on first API call (or after reactivation).
         // Benign race: two threads may both see null and schedule a task, but the CAS
         // on idleCheckTask ensures only one wins — the loser's task is immediately cancelled.
         if (idleCheckTask.get() == null) {
@@ -106,8 +116,6 @@ public class FinishedQueriesCache {
                 task.cancel();
             }
         }
-
-        lastAccessTime = System.currentTimeMillis();
 
         removeExpiredQueries();
         return StreamSupport.stream(Spliterators.spliteratorUnknownSize(finishedQueries.descendingIterator(), Spliterator.ORDERED), false)
